@@ -1,27 +1,52 @@
-import React, { useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image, Dimensions } from 'react-native';
+import React, { useEffect, useContext } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Image, Dimensions, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useAuth } from '../src/context/AuthContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width } = Dimensions.get('window');
 
 export default function WelcomeScreen() {
   const router = useRouter();
-  const { user, isAuthenticated } = useAuth();
+  const [isChecking, setIsChecking] = React.useState(true);
 
   useEffect(() => {
-    if (isAuthenticated && user) {
-      if (user.role === 'admin') {
-        router.replace('/(admin)');
-      } else if (user.role === 'provider') {
-        router.replace('/(provider)');
+    checkExistingAuth();
+  }, []);
+
+  const checkExistingAuth = async () => {
+    try {
+      const token = await AsyncStorage.getItem('auth_token');
+      const userStr = await AsyncStorage.getItem('auth_user');
+      
+      if (token && userStr) {
+        const user = JSON.parse(userStr);
+        if (user.role === 'admin') {
+          router.replace('/(admin)');
+        } else if (user.role === 'provider') {
+          router.replace('/(provider)');
+        } else {
+          router.replace('/(customer)');
+        }
       } else {
-        router.replace('/(customer)');
+        setIsChecking(false);
       }
+    } catch (error) {
+      console.error('Error checking auth:', error);
+      setIsChecking(false);
     }
-  }, [isAuthenticated, user]);
+  };
+
+  if (isChecking) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#007AFF" />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
