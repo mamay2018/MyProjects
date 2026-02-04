@@ -13,10 +13,10 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { leadsAPI, sequencesAPI } from '../../../src/api';
-import { Button } from '../../src/components/Button';
-import { SequenceCard } from '../../src/components/SequenceCard';
-import { COLORS, SPACING, FONTS, SHADOWS, STATUS_COLORS, STATUS_LABELS, CHANNEL_LABELS } from '../../src/constants/theme';
-import { Lead, Sequence } from '../../src/types';
+import { Button } from '../../../src/components/Button';
+import { SequenceCard } from '../../../src/components/SequenceCard';
+import { COLORS, SPACING, FONTS, SHADOWS, STATUS_COLORS, STATUS_LABELS, CHANNEL_LABELS } from '../../../src/constants/theme';
+import { Lead, Sequence } from '../../../src/types';
 import { format } from 'date-fns';
 
 const STATUSES = ['NEW', 'FOLLOWING_UP', 'REPLIED', 'WON', 'LOST', 'GHOSTED'] as const;
