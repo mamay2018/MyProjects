@@ -2,18 +2,9 @@ import axios from 'axios';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
-// For web, use relative URL since proxy handles routing
-// For native, use the full backend URL
-const getBaseUrl = () => {
-  if (Platform.OS === 'web') {
-    // On web, requests go through the same origin (proxy handles /api routes)
-    return '';
-  }
-  // For native apps, use the full URL
-  return process.env.EXPO_PUBLIC_BACKEND_URL || 'https://followboost-33.preview.emergentagent.com';
-};
-
-const API_URL = getBaseUrl();
+// Use the full backend URL for all platforms
+// The backend runs on port 8001 and is proxied through the main domain at /api
+const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'https://followboost-33.preview.emergentagent.com';
 
 const api = axios.create({
   baseURL: `${API_URL}/api`,
