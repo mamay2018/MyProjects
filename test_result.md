@@ -135,11 +135,14 @@ backend:
     file: "server.py"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: true
         agent: "main"
         comment: "Create/Read/Update/Delete leads implemented. Tested via curl."
+      - working: true
+        agent: "testing"
+        comment: "Comprehensive testing completed. All CRUD operations working correctly: Create lead (POST /api/leads), Get leads list (GET /api/leads), Get single lead (GET /api/leads/{id}), Update lead (PUT /api/leads/{id}), Delete lead (DELETE /api/leads/{id}). Authentication, business association, and data validation all working properly."
 
   - task: "Sequence Management"
     implemented: true
