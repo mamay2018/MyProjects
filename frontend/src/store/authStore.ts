@@ -1,6 +1,43 @@
 import { create } from 'zustand';
+import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import { authAPI, businessAPI } from '../api';
+
+// Token storage helpers that work on both web and native
+const tokenStorage = {
+  getToken: async (): Promise<string | null> => {
+    try {
+      if (Platform.OS === 'web') {
+        return localStorage.getItem('auth_token');
+      }
+      return await SecureStore.getItemAsync('auth_token');
+    } catch {
+      return null;
+    }
+  },
+  setToken: async (token: string): Promise<void> => {
+    try {
+      if (Platform.OS === 'web') {
+        localStorage.setItem('auth_token', token);
+      } else {
+        await SecureStore.setItemAsync('auth_token', token);
+      }
+    } catch (error) {
+      console.log('Error saving token:', error);
+    }
+  },
+  removeToken: async (): Promise<void> => {
+    try {
+      if (Platform.OS === 'web') {
+        localStorage.removeItem('auth_token');
+      } else {
+        await SecureStore.deleteItemAsync('auth_token');
+      }
+    } catch (error) {
+      console.log('Error removing token:', error);
+    }
+  },
+};
 
 interface User {
   id: number;
