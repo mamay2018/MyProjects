@@ -138,7 +138,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   initialize: async () => {
     set({ isLoading: true });
     try {
-      const token = await SecureStore.getItemAsync('auth_token');
+      const token = await tokenStorage.getToken();
       if (token) {
         set({ token, isAuthenticated: true });
         await get().loadUser();
