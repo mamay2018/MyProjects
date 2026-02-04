@@ -992,14 +992,21 @@ async def twilio_sms_webhook(
     
     # Normalize the phone number
     normalized_phone = normalize_phone(from_number)
+    # Get just the digits for matching (last 10)
+    search_digits = ''.join(filter(str.isdigit, normalized_phone))[-10:]
     
-    # Find lead by phone number
-    result = await db.execute(
-        select(Lead)
-        .options(selectinload(Lead.business).selectinload(Business.user))
-        .where(Lead.phone.contains(normalized_phone[-10:]))  # Match last 10 digits
-    )
-    lead = result.scalar_one_or_none()
+    # Find lead by phone number - we need to search more flexibly
+    # Since phone numbers may be stored with various formats
+    result = await db.execute(select(Lead).options(selectinload(Lead.business).selectinload(Business.user)))
+    all_leads = result.scalars().all()
+    
+    # Find matching lead by normalizing both numbers
+    lead = None
+    for l in all_leads:
+        stored_digits = ''.join(filter(str.isdigit, l.phone))[-10:]
+        if stored_digits == search_digits:
+            lead = l
+            break
     
     if not lead:
         print(f"No lead found for phone: {normalized_phone}")
