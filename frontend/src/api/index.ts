@@ -22,10 +22,34 @@ const api = axios.create({
   },
 });
 
+// Token storage for web/native compatibility
+const getToken = async (): Promise<string | null> => {
+  try {
+    if (Platform.OS === 'web') {
+      return localStorage.getItem('auth_token');
+    }
+    return await SecureStore.getItemAsync('auth_token');
+  } catch {
+    return null;
+  }
+};
+
+const removeToken = async (): Promise<void> => {
+  try {
+    if (Platform.OS === 'web') {
+      localStorage.removeItem('auth_token');
+    } else {
+      await SecureStore.deleteItemAsync('auth_token');
+    }
+  } catch (error) {
+    console.log('Error removing token:', error);
+  }
+};
+
 // Add auth token to requests
 api.interceptors.request.use(async (config) => {
   try {
-    const token = await SecureStore.getItemAsync('auth_token');
+    const token = await getToken();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -40,7 +64,7 @@ api.interceptors.response.use(
   (response) => response,
   async (error) => {
     if (error.response?.status === 401) {
-      await SecureStore.deleteItemAsync('auth_token');
+      await removeToken();
     }
     return Promise.reject(error);
   }
