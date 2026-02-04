@@ -1105,11 +1105,147 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     
     return {"status": "ok"}
 
+# ==================== DEBUG ENDPOINTS (MOCK_MODE only) ====================
+
+MOCK_MODE = os.getenv("MOCK_MODE", "true").lower() == "true"
+
+@app.post("/api/debug/inbound-sms")
+async def debug_inbound_sms(
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Simulate an inbound SMS for testing (MOCK_MODE only).
+    
+    Request body:
+    {
+        "from_phone": "+15551234567",
+        "body": "Yes, I'm interested!"
+    }
+    """
+    if not MOCK_MODE:
+        raise HTTPException(status_code=403, detail="Debug endpoints only available in MOCK_MODE")
+    
+    data = await request.json()
+    from_phone = data.get("from_phone", "")
+    body = data.get("body", "")
+    
+    if not from_phone or not body:
+        raise HTTPException(status_code=400, detail="from_phone and body are required")
+    
+    # Normalize the phone number
+    normalized_phone = normalize_phone(from_phone)
+    search_digits = ''.join(filter(str.isdigit, normalized_phone))[-10:]
+    
+    # Find lead by phone number
+    result = await db.execute(select(Lead).options(selectinload(Lead.business).selectinload(Business.user)))
+    all_leads = result.scalars().all()
+    
+    lead = None
+    for l in all_leads:
+        stored_digits = ''.join(filter(str.isdigit, l.phone))[-10:]
+        if stored_digits == search_digits:
+            lead = l
+            break
+    
+    if not lead:
+        raise HTTPException(status_code=404, detail=f"No lead found with phone matching {from_phone}")
+    
+    # Log the inbound message
+    log = MessageLog(
+        lead_id=lead.id,
+        direction=MessageDirection.INBOUND,
+        channel=Channel.SMS,
+        body=body,
+        status=MessageStatus.SENT,
+        provider_message_id=f"debug_inbound_{datetime.utcnow().timestamp()}"
+    )
+    db.add(log)
+    
+    # Stop automation if lead was following up
+    automation_stopped = False
+    if lead.status == LeadStatus.FOLLOWING_UP:
+        lead.status = LeadStatus.REPLIED
+        lead.next_followup_at = None
+        automation_stopped = True
+    
+    lead.last_contact_at = datetime.utcnow()
+    await db.commit()
+    
+    return {
+        "status": "ok",
+        "lead_id": lead.id,
+        "lead_name": lead.full_name,
+        "previous_status": "FOLLOWING_UP" if automation_stopped else lead.status.value,
+        "new_status": lead.status.value,
+        "automation_stopped": automation_stopped
+    }
+
+@app.post("/api/debug/trigger-worker")
+async def debug_trigger_worker(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Manually trigger the follow-up worker (MOCK_MODE only).
+    Useful for testing without waiting for the 1-minute interval.
+    """
+    if not MOCK_MODE:
+        raise HTTPException(status_code=403, detail="Debug endpoints only available in MOCK_MODE")
+    
+    # Run the worker logic directly
+    try:
+        now = datetime.utcnow()
+        
+        # Find leads that need follow-up
+        result = await db.execute(
+            select(Lead)
+            .options(selectinload(Lead.sequence).selectinload(Sequence.steps))
+            .options(selectinload(Lead.business))
+            .where(
+                and_(
+                    Lead.status == LeadStatus.FOLLOWING_UP,
+                    Lead.next_followup_at <= now,
+                    Lead.current_sequence_id.isnot(None)
+                )
+            )
+        )
+        leads = result.scalars().all()
+        
+        processed = 0
+        for lead in leads:
+            await send_followup(db, lead)
+            processed += 1
+        
+        if leads:
+            await db.commit()
+        
+        return {
+            "status": "ok",
+            "leads_processed": processed,
+            "timestamp": now.isoformat()
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e)
+        }
+
+@app.get("/api/debug/status")
+async def debug_status():
+    """Get current debug/mock mode status"""
+    return {
+        "mock_mode": MOCK_MODE,
+        "scheduler_running": scheduler.running,
+        "debug_endpoints_enabled": MOCK_MODE
+    }
+
 # ==================== HEALTH CHECK ====================
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat(), "mock_mode": MOCK_MODE}
 
 if __name__ == "__main__":
     import uvicorn
