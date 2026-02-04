@@ -1,10 +1,19 @@
 import axios from 'axios';
 import * as SecureStore from 'expo-secure-store';
-import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 
-const API_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL || 
-                process.env.EXPO_PUBLIC_BACKEND_URL || 
-                'https://followboost-33.preview.emergentagent.com';
+// For web, use relative URL since proxy handles routing
+// For native, use the full backend URL
+const getBaseUrl = () => {
+  if (Platform.OS === 'web') {
+    // On web, requests go through the same origin (proxy handles /api routes)
+    return '';
+  }
+  // For native apps, use the full URL
+  return process.env.EXPO_PUBLIC_BACKEND_URL || 'https://followboost-33.preview.emergentagent.com';
+};
+
+const API_URL = getBaseUrl();
 
 const api = axios.create({
   baseURL: `${API_URL}/api`,
