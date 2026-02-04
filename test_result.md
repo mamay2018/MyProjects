@@ -335,14 +335,14 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus:
-    - "Lead Management CRUD"
-    - "Sequence Management"
-    - "Follow-up Engine (Background Worker)"
-  stuck_tasks: []
+  current_focus: []
+  stuck_tasks:
+    - "Twilio Webhook (Inbound SMS)"
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
   - agent: "main"
     message: "Core MVP backend implemented with PostgreSQL database. All CRUD operations tested via curl. The SMS/Email sending is MOCKED (no real Twilio/SendGrid keys yet). Frontend screens are built with React Native/Expo. Please test the backend APIs first to verify the core flow: signup -> create business -> create lead -> assign sequence -> verify follow-up scheduling."
+  - agent: "testing"
+    message: "Backend testing completed. CRITICAL ISSUE FOUND: Twilio webhook phone number matching is broken due to phone number normalization mismatch. All other backend APIs are working correctly including auth, business management, lead CRUD, sequence management, background worker, AI rewrite, and dashboard. The webhook bug prevents inbound SMS from stopping automation - needs immediate fix."
