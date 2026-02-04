@@ -218,15 +218,18 @@ backend:
 
   - task: "Stripe Subscription"
     implemented: true
-    working: "NA"
+    working: true
     file: "services/stripe_service.py, server.py"
     stuck_count: 0
     priority: "low"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: "NA"
         agent: "main"
         comment: "Checkout session and portal endpoints implemented. Webhook for subscription events implemented. Using MOCK mode since no real Stripe keys."
+      - working: true
+        agent: "testing"
+        comment: "Stripe subscription endpoints are implemented and accessible. GET /api/subscription, POST /api/subscription/checkout, POST /api/subscription/portal, and POST /api/webhooks/stripe all respond correctly. Currently in MOCK mode due to test Stripe keys, which is expected for development environment."
 
 frontend:
   - task: "Authentication Screens (Login/Signup)"
