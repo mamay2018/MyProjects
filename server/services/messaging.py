@@ -5,8 +5,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Mock mode - set via environment variable
-MOCK_MODE = os.getenv("MOCK_MODE", "true").lower() == "true"
+# Mock mode - set to True when real credentials aren't available
+MOCK_MODE = True
 
 # Twilio config
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
@@ -17,24 +17,26 @@ TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
 FROM_EMAIL = os.getenv("FROM_EMAIL", "noreply@followuppro.com")
 
-# Initialize clients only if not in mock mode and credentials exist
-twilio_client = None
-sendgrid_client = None
+# Check if we have real credentials
+if TWILIO_ACCOUNT_SID and not TWILIO_ACCOUNT_SID.startswith("your_"):
+    try:
+        from twilio.rest import Client as TwilioClient
+        twilio_client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        MOCK_MODE = False
+    except:
+        twilio_client = None
+else:
+    twilio_client = None
 
-if not MOCK_MODE:
-    if TWILIO_ACCOUNT_SID and not TWILIO_ACCOUNT_SID.startswith("your_"):
-        try:
-            from twilio.rest import Client as TwilioClient
-            twilio_client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        except Exception as e:
-            print(f"Failed to initialize Twilio client: {e}")
-
-    if SENDGRID_API_KEY and not SENDGRID_API_KEY.startswith("your_"):
-        try:
-            from sendgrid import SendGridAPIClient
-            sendgrid_client = SendGridAPIClient(SENDGRID_API_KEY)
-        except Exception as e:
-            print(f"Failed to initialize SendGrid client: {e}")
+if SENDGRID_API_KEY and not SENDGRID_API_KEY.startswith("your_"):
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail
+        sendgrid_client = SendGridAPIClient(SENDGRID_API_KEY)
+    except:
+        sendgrid_client = None
+else:
+    sendgrid_client = None
 
 def normalize_phone(phone: str) -> str:
     """Normalize phone number to E.164 format"""
