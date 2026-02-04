@@ -12,7 +12,7 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { leadsAPI, sequencesAPI } from '../../src/api';
+import { leadsAPI, sequencesAPI } from '../../../src/api';
 import { Button } from '../../src/components/Button';
 import { SequenceCard } from '../../src/components/SequenceCard';
 import { COLORS, SPACING, FONTS, SHADOWS, STATUS_COLORS, STATUS_LABELS, CHANNEL_LABELS } from '../../src/constants/theme';
