@@ -150,47 +150,59 @@ backend:
     file: "server.py"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: true
         agent: "main"
         comment: "Built-in sequences seeded. Custom sequences can be created. Assign sequence to lead works."
+      - working: true
+        agent: "testing"
+        comment: "Sequence management fully functional. GET /api/sequences returns 3 built-in sequences (Friendly, Professional, Urgent/Scarcity). Sequence assignment (POST /api/leads/{id}/assign-sequence) correctly changes lead status to FOLLOWING_UP and schedules follow-ups. All sequence operations working correctly."
 
   - task: "Follow-up Engine (Background Worker)"
     implemented: true
-    working: "NA"
+    working: true
     file: "server.py"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: "NA"
         agent: "main"
         comment: "APScheduler job runs every minute. Finds leads with next_followup_at <= now. Sends messages via Twilio/SendGrid (MOCKED for now). Need to test full flow."
+      - working: true
+        agent: "testing"
+        comment: "Background worker is functioning correctly. APScheduler is running and processing follow-ups. Confirmed MOCK SMS messages being sent in logs. Sequence assignment properly schedules next_followup_at timestamps. Status changes (WON/LOST/REPLIED) correctly stop automation by clearing next_followup_at and current_sequence_id."
 
   - task: "Twilio Webhook (Inbound SMS)"
     implemented: true
-    working: "NA"
+    working: false
     file: "server.py"
-    stuck_count: 0
+    stuck_count: 1
     priority: "medium"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: "NA"
         agent: "main"
         comment: "Webhook endpoint /api/webhooks/twilio/sms implemented. Should match lead by phone and stop automation."
+      - working: false
+        agent: "testing"
+        comment: "CRITICAL BUG: Webhook phone number matching is broken. The webhook normalizes incoming phone (+15557776666 -> 5557776666) but searches for leads using contains() against stored phone numbers that have dashes (555-777-6666). The search fails because '5557776666' is not contained in '555-777-6666'. This prevents inbound SMS from stopping automation. Fix needed: normalize phone numbers before storage OR normalize both sides during search."
 
   - task: "AI Message Rewrite"
     implemented: true
-    working: "NA"
+    working: true
     file: "services/ai_rewrite.py, server.py"
     stuck_count: 0
     priority: "medium"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: "NA"
         agent: "main"
         comment: "OpenAI integration via Emergent LLM key. Endpoint /api/ai/rewrite implemented."
+      - working: true
+        agent: "testing"
+        comment: "AI rewrite functionality working correctly. POST /api/ai/rewrite successfully processes messages and returns rewritten versions using OpenAI via Emergent LLM key. Tested with professional tone and received properly formatted response."
 
   - task: "Dashboard Stats"
     implemented: true
