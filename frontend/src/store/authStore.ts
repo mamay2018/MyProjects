@@ -84,9 +84,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   setToken: async (token) => {
     if (token) {
-      await SecureStore.setItemAsync('auth_token', token);
+      await tokenStorage.setToken(token);
     } else {
-      await SecureStore.deleteItemAsync('auth_token');
+      await tokenStorage.removeToken();
     }
     set({ token, isAuthenticated: !!token });
   },
