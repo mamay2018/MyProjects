@@ -101,3 +101,230 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: "Build FollowUp Pro - a mobile app that helps service pros automatically follow up with leads via SMS + Email until the client replies or the lead is marked won/lost."
+
+backend:
+  - task: "User Authentication (signup/login)"
+    implemented: true
+    working: true
+    file: "server.py, auth.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "JWT auth implemented with signup/login endpoints. Tested via curl - works correctly."
+
+  - task: "Business Profile CRUD"
+    implemented: true
+    working: true
+    file: "server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Create/Get/Update business profile works. Tested via curl."
+
+  - task: "Lead Management CRUD"
+    implemented: true
+    working: true
+    file: "server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Create/Read/Update/Delete leads implemented. Tested via curl."
+
+  - task: "Sequence Management"
+    implemented: true
+    working: true
+    file: "server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Built-in sequences seeded. Custom sequences can be created. Assign sequence to lead works."
+
+  - task: "Follow-up Engine (Background Worker)"
+    implemented: true
+    working: "NA"
+    file: "server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "APScheduler job runs every minute. Finds leads with next_followup_at <= now. Sends messages via Twilio/SendGrid (MOCKED for now). Need to test full flow."
+
+  - task: "Twilio Webhook (Inbound SMS)"
+    implemented: true
+    working: "NA"
+    file: "server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Webhook endpoint /api/webhooks/twilio/sms implemented. Should match lead by phone and stop automation."
+
+  - task: "AI Message Rewrite"
+    implemented: true
+    working: "NA"
+    file: "services/ai_rewrite.py, server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "OpenAI integration via Emergent LLM key. Endpoint /api/ai/rewrite implemented."
+
+  - task: "Dashboard Stats"
+    implemented: true
+    working: true
+    file: "server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Returns todays_followups, hot_leads, pipeline_counts, money_at_risk. Tested via curl."
+
+  - task: "Stripe Subscription"
+    implemented: true
+    working: "NA"
+    file: "services/stripe_service.py, server.py"
+    stuck_count: 0
+    priority: "low"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Checkout session and portal endpoints implemented. Webhook for subscription events implemented. Using MOCK mode since no real Stripe keys."
+
+frontend:
+  - task: "Authentication Screens (Login/Signup)"
+    implemented: true
+    working: true
+    file: "app/(auth)/login.tsx, app/(auth)/signup.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Clean UI with email/password forms. Screenshot verified."
+
+  - task: "Business Onboarding Screen"
+    implemented: true
+    working: "NA"
+    file: "app/onboarding.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Business setup form implemented."
+
+  - task: "Dashboard Tab"
+    implemented: true
+    working: "NA"
+    file: "app/(tabs)/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Stats cards, pipeline overview, money at risk implemented."
+
+  - task: "Leads Tab (List/Filter)"
+    implemented: true
+    working: "NA"
+    file: "app/(tabs)/leads.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Lead list with status filters and search implemented."
+
+  - task: "Lead Detail Screen"
+    implemented: true
+    working: "NA"
+    file: "app/lead/[id]/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Lead details with status change, sequence assignment modals."
+
+  - task: "Conversation Screen"
+    implemented: true
+    working: "NA"
+    file: "app/lead/[id]/conversation.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Message thread with AI rewrite buttons and manual send."
+
+  - task: "Sequences Tab"
+    implemented: true
+    working: "NA"
+    file: "app/(tabs)/sequences.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "List of sequences with built-in badge."
+
+  - task: "Settings Tab"
+    implemented: true
+    working: "NA"
+    file: "app/(tabs)/settings.tsx"
+    stuck_count: 0
+    priority: "low"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Account info, business info, logout."
+
+metadata:
+  created_by: "main_agent"
+  version: "1.0"
+  test_sequence: 1
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "Lead Management CRUD"
+    - "Sequence Management"
+    - "Follow-up Engine (Background Worker)"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+  - agent: "main"
+    message: "Core MVP backend implemented with PostgreSQL database. All CRUD operations tested via curl. The SMS/Email sending is MOCKED (no real Twilio/SendGrid keys yet). Frontend screens are built with React Native/Expo. Please test the backend APIs first to verify the core flow: signup -> create business -> create lead -> assign sequence -> verify follow-up scheduling."
