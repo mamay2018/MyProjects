@@ -1,0 +1,668 @@
+diff --git a/phone_test.py b/phone_test.py
+new file mode 100644
+index 0000000..2be9a90
+--- /dev/null
++++ b/phone_test.py
+@@ -0,0 +1,17 @@
++#!/usr/bin/env python3
++"""
++Test phone number normalization issue
++"""
++
++# Simulate the issue
++stored_phone = "555-777-6666"  # How phone is stored in database
++incoming_phone = "+15557776666"  # From Twilio webhook
++normalized_incoming = incoming_phone[-10:]  # Last 10 digits: "5557776666"
++
++print(f"Stored phone: {stored_phone}")
++print(f"Incoming phone: {incoming_phone}")
++print(f"Normalized incoming (last 10): {normalized_incoming}")
++print(f"Does stored contain normalized? {normalized_incoming in stored_phone}")
++
++# This will be False because "5557776666" is not in "555-777-6666"
++# The webhook logic is flawed - it should normalize both sides or store normalized phones
+\ No newline at end of file
+diff --git a/test_result.md b/test_result.md
+index f6206e5..e3d8822 100644
+--- a/test_result.md
++++ b/test_result.md
+@@ -135,11 +135,14 @@ backend:
+     file: "server.py"
+     stuck_count: 0
+     priority: "high"
+-    needs_retesting: true
++    needs_retesting: false
+     status_history:
+       - working: true
+         agent: "main"
+         comment: "Create/Read/Update/Delete leads implemented. Tested via curl."
++      - working: true
++        agent: "testing"
++        comment: "Comprehensive testing completed. All CRUD operations working correctly: Create lead (POST /api/leads), Get leads list (GET /api/leads), Get single lead (GET /api/leads/{id}), Update lead (PUT /api/leads/{id}), Delete lead (DELETE /api/leads/{id}). Authentication, business association, and data validation all working properly."
+ 
+   - task: "Sequence Management"
+     implemented: true
+@@ -147,47 +150,59 @@ backend:
+     file: "server.py"
+     stuck_count: 0
+     priority: "high"
+-    needs_retesting: true
++    needs_retesting: false
+     status_history:
+       - working: true
+         agent: "main"
+         comment: "Built-in sequences seeded. Custom sequences can be created. Assign sequence to lead works."
++      - working: true
++        agent: "testing"
++        comment: "Sequence management fully functional. GET /api/sequences returns 3 built-in sequences (Friendly, Professional, Urgent/Scarcity). Sequence assignment (POST /api/leads/{id}/assign-sequence) correctly changes lead status to FOLLOWING_UP and schedules follow-ups. All sequence operations working correctly."
+ 
+   - task: "Follow-up Engine (Background Worker)"
+     implemented: true
+-    working: "NA"
++    working: true
+     file: "server.py"
+     stuck_count: 0
+     priority: "high"
+-    needs_retesting: true
++    needs_retesting: false
+     status_history:
+       - working: "NA"
+         agent: "main"
+         comment: "APScheduler job runs every minute. Finds leads with next_followup_at <= now. Sends messages via Twilio/SendGrid (MOCKED for now). Need to test full flow."
++      - working: true
++        agent: "testing"
++        comment: "Background worker is functioning correctly. APScheduler is running and processing follow-ups. Confirmed MOCK SMS messages being sent in logs. Sequence assignment properly schedules next_followup_at timestamps. Status changes (WON/LOST/REPLIED) correctly stop automation by clearing next_followup_at and current_sequence_id."
+ 
+   - task: "Twilio Webhook (Inbound SMS)"
+     implemented: true
+-    working: "NA"
++    working: false
+     file: "server.py"
+-    stuck_count: 0
++    stuck_count: 1
+     priority: "medium"
+-    needs_retesting: true
++    needs_retesting: false
+     status_history:
+       - working: "NA"
+         agent: "main"
+         comment: "Webhook endpoint /api/webhooks/twilio/sms implemented. Should match lead by phone and stop automation."
++      - working: false
++        agent: "testing"
++        comment: "CRITICAL BUG: Webhook phone number matching is broken. The webhook normalizes incoming phone (+15557776666 -> 5557776666) but searches for leads using contains() against stored phone numbers that have dashes (555-777-6666). The search fails because '5557776666' is not contained in '555-777-6666'. This prevents inbound SMS from stopping automation. Fix needed: normalize phone numbers before storage OR normalize both sides during search."
+ 
+   - task: "AI Message Rewrite"
+     implemented: true
+-    working: "NA"
++    working: true
+     file: "services/ai_rewrite.py, server.py"
+     stuck_count: 0
+     priority: "medium"
+-    needs_retesting: true
++    needs_retesting: false
+     status_history:
+       - working: "NA"
+         agent: "main"
+         comment: "OpenAI integration via Emergent LLM key. Endpoint /api/ai/rewrite implemented."
++      - working: true
++        agent: "testing"
++        comment: "AI rewrite functionality working correctly. POST /api/ai/rewrite successfully processes messages and returns rewritten versions using OpenAI via Emergent LLM key. Tested with professional tone and received properly formatted response."
+ 
+   - task: "Dashboard Stats"
+     implemented: true
+@@ -203,15 +218,18 @@ backend:
+ 
+   - task: "Stripe Subscription"
+     implemented: true
+-    working: "NA"
++    working: true
+     file: "services/stripe_service.py, server.py"
+     stuck_count: 0
+     priority: "low"
+-    needs_retesting: true
++    needs_retesting: false
+     status_history:
+       - working: "NA"
+         agent: "main"
+         comment: "Checkout session and portal endpoints implemented. Webhook for subscription events implemented. Using MOCK mode since no real Stripe keys."
++      - working: true
++        agent: "testing"
++        comment: "Stripe subscription endpoints are implemented and accessible. GET /api/subscription, POST /api/subscription/checkout, POST /api/subscription/portal, and POST /api/webhooks/stripe all respond correctly. Currently in MOCK mode due to test Stripe keys, which is expected for development environment."
+ 
+ frontend:
+   - task: "Authentication Screens (Login/Signup)"
+@@ -317,14 +335,14 @@ metadata:
+   run_ui: false
+ 
+ test_plan:
+-  current_focus:
+-    - "Lead Management CRUD"
+-    - "Sequence Management"
+-    - "Follow-up Engine (Background Worker)"
+-  stuck_tasks: []
++  current_focus: []
++  stuck_tasks:
++    - "Twilio Webhook (Inbound SMS)"
+   test_all: false
+   test_priority: "high_first"
+ 
+ agent_communication:
+   - agent: "main"
+-    message: "Core MVP backend implemented with PostgreSQL database. All CRUD operations tested via curl. The SMS/Email sending is MOCKED (no real Twilio/SendGrid keys yet). Frontend screens are built with React Native/Expo. Please test the backend APIs first to verify the core flow: signup -> create business -> create lead -> assign sequence -> verify follow-up scheduling."
+\ No newline at end of file
++    message: "Core MVP backend implemented with PostgreSQL database. All CRUD operations tested via curl. The SMS/Email sending is MOCKED (no real Twilio/SendGrid keys yet). Frontend screens are built with React Native/Expo. Please test the backend APIs first to verify the core flow: signup -> create business -> create lead -> assign sequence -> verify follow-up scheduling."
++  - agent: "testing"
++    message: "Backend testing completed. CRITICAL ISSUE FOUND: Twilio webhook phone number matching is broken due to phone number normalization mismatch. All other backend APIs are working correctly including auth, business management, lead CRUD, sequence management, background worker, AI rewrite, and dashboard. The webhook bug prevents inbound SMS from stopping automation - needs immediate fix."
+\ No newline at end of file
+diff --git a/webhook_debug.py b/webhook_debug.py
+new file mode 100644
+index 0000000..b250404
+--- /dev/null
++++ b/webhook_debug.py
+@@ -0,0 +1,164 @@
++#!/usr/bin/env python3
++"""
++Debug Twilio Webhook Issue
++"""
++
++import requests
++import json
++from typing import Dict, Any, Optional
++
++class WebhookDebugger:
++    def __init__(self, base_url: str):
++        self.base_url = base_url.rstrip('/')
++        self.session = requests.Session()
++        self.auth_token = None
++        
++    def log(self, message: str, level: str = "INFO"):
++        """Log test messages"""
++        print(f"[{level}] {message}")
++        
++    def make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, 
++                    headers: Optional[Dict] = None, params: Optional[Dict] = None) -> Dict[str, Any]:
++        """Make HTTP request with error handling"""
++        url = f"{self.base_url}{endpoint}"
++        
++        if self.auth_token and headers is None:
++            headers = {}
++        if self.auth_token:
++            headers = headers or {}
++            headers["Authorization"] = f"Bearer {self.auth_token}"
++            
++        try:
++            if method.upper() == "GET":
++                response = self.session.get(url, headers=headers, params=params, timeout=30)
++            elif method.upper() == "POST":
++                response = self.session.post(url, json=data, headers=headers, params=params, timeout=30)
++            elif method.upper() == "PUT":
++                response = self.session.put(url, json=data, headers=headers, params=params, timeout=30)
++            else:
++                return {"success": False, "error": f"Unsupported method: {method}"}
++                
++            return {
++                "success": response.status_code < 400,
++                "status_code": response.status_code,
++                "data": response.json() if response.content else {},
++                "error": None if response.status_code < 400 else f"HTTP {response.status_code}: {response.text}"
++            }
++            
++        except Exception as e:
++            return {"success": False, "error": f"Request failed: {str(e)}"}
++    
++    def setup_and_test_webhook(self):
++        """Setup test and debug webhook"""
++        
++        # 1. Setup user and business
++        self.log("Setting up test user and business...")
++        
++        signup_data = {"email": "webhookdebug@test.com", "password": "Debug123!"}
++        result = self.make_request("POST", "/api/auth/signup", signup_data)
++        if not result["success"]:
++            self.log(f"Signup failed: {result['error']}", "ERROR")
++            return
++        
++        self.auth_token = result["data"].get("access_token")
++        
++        business_data = {"business_name": "Debug Business", "owner_name": "Debug Owner"}
++        result = self.make_request("POST", "/api/business", business_data)
++        if not result["success"]:
++            self.log(f"Business creation failed: {result['error']}", "ERROR")
++            return
++        
++        # 2. Create lead with specific phone number
++        test_phone = "555-777-6666"  # This will be normalized to +15557776666
++        lead_data = {
++            "full_name": "Webhook Debug Lead",
++            "phone": test_phone,
++            "job_type": "Debug Test",
++            "quote_amount": 1000,
++            "preferred_channel": "SMS"
++        }
++        
++        self.log(f"Creating lead with phone: {test_phone}")
++        result = self.make_request("POST", "/api/leads", lead_data)
++        if not result["success"]:
++            self.log(f"Lead creation failed: {result['error']}", "ERROR")
++            return
++        
++        lead_id = result["data"]["id"]
++        created_phone = result["data"]["phone"]
++        self.log(f"Lead created with ID: {lead_id}, stored phone: {created_phone}")
++        
++        # 3. Assign sequence to start automation
++        result = self.make_request("GET", "/api/sequences")
++        if not result["success"]:
++            self.log(f"Get sequences failed: {result['error']}", "ERROR")
++            return
++        
++        sequence_id = result["data"][0]["id"]
++        assign_data = {"sequence_id": sequence_id}
++        result = self.make_request("POST", f"/api/leads/{lead_id}/assign-sequence", assign_data)
++        if not result["success"]:
++            self.log(f"Sequence assignment failed: {result['error']}", "ERROR")
++            return
++        
++        self.log("Sequence assigned, lead should be in FOLLOWING_UP status")
++        
++        # 4. Test webhook with various phone number formats
++        webhook_formats = [
++            "+15557776666",    # E.164 format
++            "15557776666",     # With country code, no +
++            "5557776666",      # Without country code
++            "(555) 777-6666",  # Formatted
++            "555-777-6666",    # Dashed
++        ]
++        
++        for phone_format in webhook_formats:
++            self.log(f"\nTesting webhook with phone format: {phone_format}")
++            
++            # Simulate Twilio webhook
++            webhook_data = {
++                "From": phone_format,
++                "Body": "Thanks for following up!",
++                "MessageSid": f"SM{phone_format.replace('+', '').replace('-', '').replace('(', '').replace(')', '').replace(' ', '')}"
++            }
++            
++            # Make webhook request (form data)
++            url = f"{self.base_url}/api/webhooks/twilio/sms"
++            try:
++                response = self.session.post(url, data=webhook_data, timeout=30)
++                webhook_result = {
++                    "success": response.status_code < 400,
++                    "status_code": response.status_code,
++                    "data": response.json() if response.content else {},
++                }
++                
++                self.log(f"Webhook response: {webhook_result}")
++                
++                # Check lead status
++                result = self.make_request("GET", f"/api/leads/{lead_id}")
++                if result["success"]:
++                    lead_status = result["data"]["status"]
++                    self.log(f"Lead status after webhook: {lead_status}")
++                    
++                    if lead_status == "REPLIED":
++                        self.log(f"✅ SUCCESS: Webhook worked with format {phone_format}")
++                        return
++                    else:
++                        self.log(f"❌ Lead status is {lead_status}, expected REPLIED")
++                else:
++                    self.log(f"Failed to get lead: {result['error']}", "ERROR")
++                    
++            except Exception as e:
++                self.log(f"Webhook request failed: {str(e)}", "ERROR")
++        
++        self.log("❌ All webhook formats failed")
++
++
++def main():
++    backend_url = "https://followboost-33.preview.emergentagent.com"
++    debugger = WebhookDebugger(backend_url)
++    debugger.setup_and_test_webhook()
++
++
++if __name__ == "__main__":
++    main()
+\ No newline at end of file
+diff --git a/worker_test.py b/worker_test.py
+new file mode 100644
+index 0000000..ceb5e32
+--- /dev/null
++++ b/worker_test.py
+@@ -0,0 +1,334 @@
++#!/usr/bin/env python3
++"""
++FollowUp Pro Background Worker Test
++Tests the follow-up scheduling and background processing
++"""
++
++import requests
++import json
++import time
++from datetime import datetime, timedelta
++from typing import Dict, Any, Optional
++
++class FollowUpWorkerTester:
++    def __init__(self, base_url: str):
++        self.base_url = base_url.rstrip('/')
++        self.session = requests.Session()
++        self.auth_token = None
++        self.lead_id = None
++        self.sequence_id = None
++        
++        # Test data
++        self.test_email = "workertest@followuppro.com"
++        self.test_password = "WorkerTest123!"
++        self.test_business = {
++            "business_name": "Test Worker Business",
++            "owner_name": "Worker Tester"
++        }
++        self.test_lead = {
++            "full_name": "Background Test Lead",
++            "phone": "555-999-8888",
++            "email": "testlead@example.com",
++            "job_type": "Background Test Job",
++            "quote_amount": 5000,
++            "preferred_channel": "SMS"
++        }
++        
++    def log(self, message: str, level: str = "INFO"):
++        """Log test messages with timestamp"""
++        timestamp = datetime.now().strftime("%H:%M:%S")
++        print(f"[{timestamp}] {level}: {message}")
++        
++    def make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, 
++                    headers: Optional[Dict] = None, params: Optional[Dict] = None) -> Dict[str, Any]:
++        """Make HTTP request with error handling"""
++        url = f"{self.base_url}{endpoint}"
++        
++        # Add auth header if token exists
++        if self.auth_token and headers is None:
++            headers = {}
++        if self.auth_token:
++            headers = headers or {}
++            headers["Authorization"] = f"Bearer {self.auth_token}"
++            
++        try:
++            if method.upper() == "GET":
++                response = self.session.get(url, headers=headers, params=params, timeout=30)
++            elif method.upper() == "POST":
++                response = self.session.post(url, json=data, headers=headers, params=params, timeout=30)
++            elif method.upper() == "PUT":
++                response = self.session.put(url, json=data, headers=headers, params=params, timeout=30)
++            elif method.upper() == "DELETE":
++                response = self.session.delete(url, headers=headers, params=params, timeout=30)
++            else:
++                return {"success": False, "error": f"Unsupported method: {method}"}
++                
++            return {
++                "success": response.status_code < 400,
++                "status_code": response.status_code,
++                "data": response.json() if response.content else {},
++                "error": None if response.status_code < 400 else f"HTTP {response.status_code}: {response.text}"
++            }
++            
++        except requests.exceptions.RequestException as e:
++            return {"success": False, "error": f"Request failed: {str(e)}"}
++        except json.JSONDecodeError as e:
++            return {"success": False, "error": f"JSON decode error: {str(e)}"}
++        except Exception as e:
++            return {"success": False, "error": f"Unexpected error: {str(e)}"}
++    
++    def setup_test_environment(self) -> bool:
++        """Setup user, business, and lead for testing"""
++        self.log("Setting up test environment...")
++        
++        # Signup
++        signup_data = {"email": self.test_email, "password": self.test_password}
++        result = self.make_request("POST", "/api/auth/signup", signup_data)
++        if not result["success"]:
++            self.log(f"❌ Signup failed: {result['error']}", "ERROR")
++            return False
++        
++        self.auth_token = result["data"].get("access_token")
++        
++        # Create business
++        result = self.make_request("POST", "/api/business", self.test_business)
++        if not result["success"]:
++            self.log(f"❌ Business creation failed: {result['error']}", "ERROR")
++            return False
++        
++        # Get sequences
++        result = self.make_request("GET", "/api/sequences")
++        if not result["success"] or not result["data"]:
++            self.log(f"❌ Get sequences failed: {result['error']}", "ERROR")
++            return False
++        
++        self.sequence_id = result["data"][0]["id"]  # Use first sequence
++        
++        # Create lead
++        result = self.make_request("POST", "/api/leads", self.test_lead)
++        if not result["success"]:
++            self.log(f"❌ Lead creation failed: {result['error']}", "ERROR")
++            return False
++        
++        self.lead_id = result["data"]["id"]
++        self.log("✅ Test environment setup complete")
++        return True
++    
++    def test_sequence_assignment_and_scheduling(self) -> bool:
++        """Test that assigning a sequence properly schedules follow-ups"""
++        self.log("Testing sequence assignment and follow-up scheduling...")
++        
++        # Get lead before assignment
++        result = self.make_request("GET", f"/api/leads/{self.lead_id}")
++        if not result["success"]:
++            self.log(f"❌ Failed to get lead: {result['error']}", "ERROR")
++            return False
++        
++        lead_before = result["data"]
++        self.log(f"Lead before assignment - Status: {lead_before.get('status')}, Next followup: {lead_before.get('next_followup_at')}")
++        
++        # Assign sequence
++        assign_data = {"sequence_id": self.sequence_id}
++        result = self.make_request("POST", f"/api/leads/{self.lead_id}/assign-sequence", assign_data)
++        if not result["success"]:
++            self.log(f"❌ Sequence assignment failed: {result['error']}", "ERROR")
++            return False
++        
++        lead_after = result["data"]
++        self.log(f"Lead after assignment - Status: {lead_after.get('status')}, Next followup: {lead_after.get('next_followup_at')}")
++        
++        # Verify changes
++        if lead_after.get("status") != "FOLLOWING_UP":
++            self.log(f"❌ Expected status FOLLOWING_UP, got {lead_after.get('status')}", "ERROR")
++            return False
++        
++        if not lead_after.get("next_followup_at"):
++            self.log("❌ No next_followup_at scheduled", "ERROR")
++            return False
++        
++        if not lead_after.get("current_sequence_id"):
++            self.log("❌ No current_sequence_id set", "ERROR")
++            return False
++        
++        self.log("✅ Sequence assignment and scheduling working correctly")
++        return True
++    
++    def test_message_logging(self) -> bool:
++        """Test that messages are being logged"""
++        self.log("Testing message logging...")
++        
++        # Wait a moment for any background processing
++        time.sleep(2)
++        
++        # Check message logs
++        result = self.make_request("GET", f"/api/leads/{self.lead_id}/messages")
++        if not result["success"]:
++            self.log(f"❌ Failed to get messages: {result['error']}", "ERROR")
++            return False
++        
++        messages = result["data"]
++        self.log(f"Found {len(messages)} messages in log")
++        
++        # For now, just verify the endpoint works - messages might be sent by background worker
++        self.log("✅ Message logging endpoint working")
++        return True
++    
++    def test_status_changes_stop_automation(self) -> bool:
++        """Test that changing lead status to WON/LOST/REPLIED stops automation"""
++        self.log("Testing that status changes stop automation...")
++        
++        # Update lead to REPLIED
++        update_data = {"status": "REPLIED"}
++        result = self.make_request("PUT", f"/api/leads/{self.lead_id}", update_data)
++        if not result["success"]:
++            self.log(f"❌ Failed to update lead status: {result['error']}", "ERROR")
++            return False
++        
++        lead_updated = result["data"]
++        
++        # Verify automation stopped
++        if lead_updated.get("next_followup_at") is not None:
++            self.log(f"❌ next_followup_at should be null after REPLIED, got {lead_updated.get('next_followup_at')}", "ERROR")
++            return False
++        
++        if lead_updated.get("current_sequence_id") is not None:
++            self.log(f"❌ current_sequence_id should be null after REPLIED, got {lead_updated.get('current_sequence_id')}", "ERROR")
++            return False
++        
++        self.log("✅ Status change correctly stops automation")
++        return True
++    
++    def test_webhook_endpoint(self) -> bool:
++        """Test Twilio webhook endpoint"""
++        self.log("Testing Twilio webhook endpoint...")
++        
++        # Create a new lead for webhook testing
++        webhook_lead = {
++            "full_name": "Webhook Test Lead",
++            "phone": "555-777-6666",
++            "job_type": "Webhook Test",
++            "quote_amount": 2000,
++            "preferred_channel": "SMS"
++        }
++        
++        result = self.make_request("POST", "/api/leads", webhook_lead)
++        if not result["success"]:
++            self.log(f"❌ Failed to create webhook test lead: {result['error']}", "ERROR")
++            return False
++        
++        webhook_lead_id = result["data"]["id"]
++        
++        # Assign sequence to start automation
++        assign_data = {"sequence_id": self.sequence_id}
++        result = self.make_request("POST", f"/api/leads/{webhook_lead_id}/assign-sequence", assign_data)
++        if not result["success"]:
++            self.log(f"❌ Failed to assign sequence to webhook lead: {result['error']}", "ERROR")
++            return False
++        
++        # Simulate Twilio webhook (form data)
++        webhook_data = {
++            "From": "+15557776666",
++            "Body": "Thanks for following up! I'm interested.",
++            "MessageSid": "SM123456789"
++        }
++        
++        # Make webhook request (form data, not JSON)
++        url = f"{self.base_url}/api/webhooks/twilio/sms"
++        try:
++            response = self.session.post(url, data=webhook_data, timeout=30)
++            webhook_result = {
++                "success": response.status_code < 400,
++                "status_code": response.status_code,
++                "data": response.json() if response.content else {},
++                "error": None if response.status_code < 400 else f"HTTP {response.status_code}: {response.text}"
++            }
++        except Exception as e:
++            webhook_result = {"success": False, "error": f"Webhook request failed: {str(e)}"}
++        
++        if not webhook_result["success"]:
++            self.log(f"❌ Webhook request failed: {webhook_result['error']}", "ERROR")
++            return False
++        
++        # Check if lead status changed to REPLIED
++        result = self.make_request("GET", f"/api/leads/{webhook_lead_id}")
++        if result["success"]:
++            lead_data = result["data"]
++            if lead_data.get("status") == "REPLIED":
++                self.log("✅ Webhook correctly changed lead status to REPLIED")
++                return True
++            else:
++                self.log(f"❌ Expected lead status REPLIED, got {lead_data.get('status')}", "ERROR")
++                return False
++        else:
++            self.log(f"❌ Failed to get lead after webhook: {result['error']}", "ERROR")
++            return False
++    
++    def run_worker_tests(self) -> Dict[str, bool]:
++        """Run all background worker tests"""
++        self.log("=" * 60)
++        self.log("STARTING FOLLOWUP PRO BACKGROUND WORKER TESTS")
++        self.log("=" * 60)
++        
++        # Setup
++        if not self.setup_test_environment():
++            self.log("❌ Failed to setup test environment", "ERROR")
++            return {"Setup": False}
++        
++        tests = [
++            ("Sequence Assignment & Scheduling", self.test_sequence_assignment_and_scheduling),
++            ("Message Logging", self.test_message_logging),
++            ("Status Changes Stop Automation", self.test_status_changes_stop_automation),
++            ("Twilio Webhook", self.test_webhook_endpoint),
++        ]
++        
++        results = {"Setup": True}
++        passed = 1  # Setup passed
++        total = len(tests) + 1  # +1 for setup
++        
++        for test_name, test_func in tests:
++            self.log(f"\n--- Running: {test_name} ---")
++            try:
++                result = test_func()
++                results[test_name] = result
++                if result:
++                    passed += 1
++                time.sleep(0.5)
++            except Exception as e:
++                self.log(f"❌ {test_name} crashed: {str(e)}", "ERROR")
++                results[test_name] = False
++        
++        # Summary
++        self.log("\n" + "=" * 60)
++        self.log("BACKGROUND WORKER TEST SUMMARY")
++        self.log("=" * 60)
++        
++        for test_name, result in results.items():
++            status = "✅ PASS" if result else "❌ FAIL"
++            self.log(f"{status}: {test_name}")
++        
++        self.log(f"\nOverall: {passed}/{total} tests passed ({passed/total*100:.1f}%)")
++        
++        return results
++
++
++def main():
++    """Main test runner"""
++    backend_url = "https://followboost-33.preview.emergentagent.com"
++    
++    print(f"Testing FollowUp Pro Background Worker at: {backend_url}")
++    
++    tester = FollowUpWorkerTester(backend_url)
++    results = tester.run_worker_tests()
++    
++    # Return exit code based on results
++    failed_tests = [name for name, result in results.items() if not result]
++    if failed_tests:
++        print(f"\nFailed tests: {', '.join(failed_tests)}")
++        return 1
++    else:
++        print("\nAll background worker tests passed!")
++        return 0
++
++
++if __name__ == "__main__":
++    exit(main())
+\ No newline at end of file
