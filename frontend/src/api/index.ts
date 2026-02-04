@@ -2,15 +2,16 @@ import axios from 'axios';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
-// Use the full backend URL for all platforms
-// The backend runs on port 8001 and is proxied through the main domain at /api
-const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'https://followboost-33.preview.emergentagent.com';
+// Backend URL - use the external preview URL for all platforms
+// This allows both web and Expo Go to reach the backend
+const API_URL = 'https://followboost-33.preview.emergentagent.com';
 
 const api = axios.create({
   baseURL: `${API_URL}/api`,
   headers: {
     'Content-Type': 'application/json',
   },
+  timeout: 10000, // 10 second timeout
 });
 
 // Token storage for web/native compatibility
