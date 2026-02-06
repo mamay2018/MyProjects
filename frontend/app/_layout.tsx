@@ -32,8 +32,8 @@ export default function RootLayout() {
         <Stack.Screen name="(auth)" options={{ headerShown: false }} />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="onboarding" options={{ title: 'Setup Business', headerBackVisible: false }} />
-        <Stack.Screen name="lead/new" options={{ title: 'Add Lead' }} />
-        <Stack.Screen name="sequence/new" options={{ title: 'Create Sequence' }} />
+        <Stack.Screen name="lead" options={{ headerShown: false }} />
+        <Stack.Screen name="sequence" options={{ headerShown: false }} />
       </Stack>
     </>
   );
