@@ -32,8 +32,8 @@ export default function RootLayout() {
         <Stack.Screen name="(auth)" options={{ headerShown: false }} />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="onboarding" options={{ title: 'Setup Business', headerBackVisible: false }} />
-        <Stack.Screen name="lead/[id]" options={{ title: 'Lead Details' }} />
         <Stack.Screen name="lead/new" options={{ title: 'Add Lead' }} />
+        <Stack.Screen name="lead/[id]/index" options={{ title: 'Lead Details' }} />
         <Stack.Screen name="lead/[id]/conversation" options={{ title: 'Conversation' }} />
         <Stack.Screen name="sequence/[id]" options={{ title: 'Sequence Details' }} />
         <Stack.Screen name="sequence/new" options={{ title: 'Create Sequence' }} />
