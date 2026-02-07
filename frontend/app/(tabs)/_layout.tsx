@@ -48,11 +48,11 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="sequences"
+        name="analytics"
         options={{
-          title: 'Sequences',
+          title: 'Analytics',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="git-branch" size={size} color={color} />
+            <Ionicons name="bar-chart" size={size} color={color} />
           ),
         }}
       />
@@ -63,6 +63,12 @@ export default function TabsLayout() {
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="settings" size={size} color={color} />
           ),
+        }}
+      />
+      <Tabs.Screen
+        name="sequences"
+        options={{
+          href: null, // Hide old sequences tab
         }}
       />
     </Tabs>
