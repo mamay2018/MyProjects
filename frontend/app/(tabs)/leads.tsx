@@ -11,29 +11,35 @@ import {
 import { useRouter, useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { leadsAPI } from '../../src/api';
+import { leadsAPI, leadSourceAPI } from '../../src/api';
 import { LeadCard } from '../../src/components/LeadCard';
-import { COLORS, SPACING, FONTS, STATUS_COLORS, STATUS_LABELS } from '../../src/constants/theme';
-import { Lead } from '../../src/types';
+import { COLORS, SPACING, FONTS, STATUS_COLORS, STATUS_LABELS, STATUS_ORDER } from '../../src/constants/theme';
+import { LeadListItem, LeadSource } from '../../src/types';
 
-const STATUS_FILTERS = ['ALL', 'NEW', 'FOLLOWING_UP', 'REPLIED', 'WON', 'LOST', 'GHOSTED'];
+const STATUS_FILTERS = ['ALL', ...STATUS_ORDER];
 
 export default function LeadsScreen() {
   const router = useRouter();
-  const [leads, setLeads] = useState<Lead[]>([]);
+  const [leads, setLeads] = useState<LeadListItem[]>([]);
+  const [sources, setSources] = useState<LeadSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState('');
   const [selectedStatus, setSelectedStatus] = useState('ALL');
+  const [selectedSource, setSelectedSource] = useState<string | null>(null);
 
-  const loadLeads = async () => {
+  const loadData = async () => {
     try {
-      const params: any = {};
-      if (selectedStatus !== 'ALL') params.status = selectedStatus;
-      if (search) params.search = search;
-      
-      const response = await leadsAPI.getAll(params);
-      setLeads(response.data);
+      const [leadsRes, sourcesRes] = await Promise.all([
+        leadsAPI.getAll({
+          status: selectedStatus !== 'ALL' ? selectedStatus : undefined,
+          source_id: selectedSource || undefined,
+          search: search || undefined,
+        }),
+        leadSourceAPI.getAll(),
+      ]);
+      setLeads(leadsRes.data);
+      setSources(sourcesRes.data);
     } catch (error) {
       console.log('Error loading leads:', error);
     } finally {
@@ -44,13 +50,13 @@ export default function LeadsScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      loadLeads();
-    }, [selectedStatus, search])
+      loadData();
+    }, [selectedStatus, selectedSource, search])
   );
 
   const onRefresh = () => {
     setRefreshing(true);
-    loadLeads();
+    loadData();
   };
 
   const renderStatusFilter = () => (
@@ -76,6 +82,33 @@ export default function LeadsScreen() {
             selectedStatus === item && styles.filterTextActive
           ]}>
             {item === 'ALL' ? 'All' : STATUS_LABELS[item]}
+          </Text>
+        </TouchableOpacity>
+      )}
+    />
+  );
+
+  const renderSourceFilter = () => (
+    <FlatList
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      data={[{ id: null, name: 'All Sources', color: COLORS.textSecondary }, ...sources]}
+      keyExtractor={(item) => item.id || 'all'}
+      contentContainerStyle={styles.filterContainer}
+      renderItem={({ item }) => (
+        <TouchableOpacity
+          style={[
+            styles.sourceChip,
+            selectedSource === item.id && styles.sourceChipActive
+          ]}
+          onPress={() => setSelectedSource(item.id)}
+        >
+          <View style={[styles.sourceDot, { backgroundColor: item.color }]} />
+          <Text style={[
+            styles.filterText,
+            selectedSource === item.id && styles.filterTextActive
+          ]} numberOfLines={1}>
+            {item.name}
           </Text>
         </TouchableOpacity>
       )}
@@ -111,11 +144,14 @@ export default function LeadsScreen() {
 
       {/* Status Filter */}
       {renderStatusFilter()}
+      
+      {/* Source Filter */}
+      {renderSourceFilter()}
 
       {/* Leads List */}
       <FlatList
         data={leads}
-        keyExtractor={(item) => item.id.toString()}
+        keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
         renderItem={({ item }) => (
           <LeadCard
@@ -204,6 +240,27 @@ const styles = StyleSheet.create({
   },
   filterTextActive: {
     color: '#FFFFFF',
+  },
+  sourceChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+    borderRadius: 16,
+    backgroundColor: COLORS.card,
+    marginRight: SPACING.sm,
+    gap: SPACING.xs,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  sourceChipActive: {
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.primary + '15',
+  },
+  sourceDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
   },
   listContent: {
     padding: SPACING.md,

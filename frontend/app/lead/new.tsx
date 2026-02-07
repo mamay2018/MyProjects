@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   View, 
   Text, 
@@ -6,48 +6,93 @@ import {
   ScrollView, 
   KeyboardAvoidingView,
   Platform,
-  Alert
+  Alert,
+  TouchableOpacity
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { leadsAPI } from '../../src/api';
+import { leadsAPI, leadSourceAPI, followUpPlanAPI } from '../../src/api';
 import { Input } from '../../src/components/Input';
 import { Button } from '../../src/components/Button';
-import { COLORS, SPACING, FONTS, CHANNEL_LABELS } from '../../src/constants/theme';
-import { TouchableOpacity } from 'react-native';
+import { COLORS, SPACING, FONTS } from '../../src/constants/theme';
+import { LeadSource, FollowUpPlan } from '../../src/types';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const CHANNELS = ['SMS', 'EMAIL', 'BOTH'] as const;
+const LAST_SOURCE_KEY = 'last_used_source_id';
 
 export default function NewLeadScreen() {
   const router = useRouter();
   
-  const [fullName, setFullName] = useState('');
+  const [customerName, setCustomerName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
-  const [jobType, setJobType] = useState('');
-  const [quoteAmount, setQuoteAmount] = useState('');
-  const [preferredChannel, setPreferredChannel] = useState<'SMS' | 'EMAIL' | 'BOTH'>('SMS');
   const [notes, setNotes] = useState('');
+  const [pastedText, setPastedText] = useState('');
+  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
+  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
+  const [sources, setSources] = useState<LeadSource[]>([]);
+  const [plans, setPlans] = useState<FollowUpPlan[]>([]);
   const [loading, setLoading] = useState(false);
+  const [showPasteMode, setShowPasteMode] = useState(false);
+
+  useEffect(() => {
+    loadInitialData();
+  }, []);
+
+  const loadInitialData = async () => {
+    try {
+      const [sourcesRes, plansRes] = await Promise.all([
+        leadSourceAPI.getAll(),
+        followUpPlanAPI.getAll(),
+      ]);
+      setSources(sourcesRes.data);
+      setPlans(plansRes.data);
+      
+      // Load last used source
+      const lastSourceId = await AsyncStorage.getItem(LAST_SOURCE_KEY);
+      if (lastSourceId && sourcesRes.data.find((s: LeadSource) => s.id === lastSourceId)) {
+        setSelectedSourceId(lastSourceId);
+      } else {
+        // Default to "Referral" or first source
+        const defaultSource = sourcesRes.data.find((s: LeadSource) => s.is_default) || sourcesRes.data[0];
+        if (defaultSource) {
+          setSelectedSourceId(defaultSource.id);
+        }
+      }
+      
+      // Default to first enabled plan
+      const enabledPlan = plansRes.data.find((p: FollowUpPlan) => p.enabled);
+      if (enabledPlan) {
+        setSelectedPlanId(enabledPlan.id);
+      }
+    } catch (error) {
+      console.log('Error loading initial data:', error);
+    }
+  };
 
   const handleCreate = async () => {
-    if (!fullName || !phone || !jobType) {
-      Alert.alert('Error', 'Please fill in required fields (Name, Phone, Job Type)');
+    if (!customerName) {
+      Alert.alert('Error', 'Please enter a customer name');
       return;
     }
 
     setLoading(true);
     try {
       await leadsAPI.create({
-        full_name: fullName,
-        phone,
-        email: email || undefined,
-        job_type: jobType,
-        quote_amount: quoteAmount ? parseFloat(quoteAmount) : undefined,
-        preferred_channel: preferredChannel,
-        notes: notes || undefined,
+        customer_name: customerName,
+        customer_phone: phone || undefined,
+        customer_email: email || undefined,
+        lead_source_id: selectedSourceId || undefined,
+        notes: notes || pastedText || undefined,
+        follow_up_plan_id: selectedPlanId || undefined,
       });
+      
+      // Save last used source
+      if (selectedSourceId) {
+        await AsyncStorage.setItem(LAST_SOURCE_KEY, selectedSourceId);
+      }
+      
       router.back();
     } catch (error: any) {
       Alert.alert('Error', error.response?.data?.detail || 'Could not create lead');
@@ -55,6 +100,30 @@ export default function NewLeadScreen() {
       setLoading(false);
     }
   };
+
+  const renderSourceSelector = () => (
+    <View style={styles.sourceContainer}>
+      {sources.map((source) => (
+        <TouchableOpacity
+          key={source.id}
+          style={[
+            styles.sourceChip,
+            selectedSourceId === source.id && styles.sourceChipActive,
+            { borderColor: source.color }
+          ]}
+          onPress={() => setSelectedSourceId(source.id)}
+        >
+          <View style={[styles.sourceDot, { backgroundColor: source.color }]} />
+          <Text style={[
+            styles.sourceText,
+            selectedSourceId === source.id && styles.sourceTextActive
+          ]} numberOfLines={1}>
+            {source.name}
+          </Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
@@ -66,95 +135,122 @@ export default function NewLeadScreen() {
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
         >
+          {/* Mode Toggle */}
+          <View style={styles.modeToggle}>
+            <TouchableOpacity
+              style={[styles.modeButton, !showPasteMode && styles.modeButtonActive]}
+              onPress={() => setShowPasteMode(false)}
+            >
+              <Ionicons name="create-outline" size={20} color={!showPasteMode ? '#FFF' : COLORS.textSecondary} />
+              <Text style={[styles.modeButtonText, !showPasteMode && styles.modeButtonTextActive]}>Manual Entry</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modeButton, showPasteMode && styles.modeButtonActive]}
+              onPress={() => setShowPasteMode(true)}
+            >
+              <Ionicons name="clipboard-outline" size={20} color={showPasteMode ? '#FFF' : COLORS.textSecondary} />
+              <Text style={[styles.modeButtonText, showPasteMode && styles.modeButtonTextActive]}>Paste Text</Text>
+            </TouchableOpacity>
+          </View>
+
+          {showPasteMode ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Paste Lead Info</Text>
+              <Text style={styles.sectionHint}>Paste text from Thumbtack, email, etc.</Text>
+              <Input
+                placeholder="Paste lead information here..."
+                value={pastedText}
+                onChangeText={setPastedText}
+                multiline
+                numberOfLines={8}
+                style={styles.pasteInput}
+              />
+              <Input
+                label="Customer Name *"
+                placeholder="Extract from paste or enter manually"
+                value={customerName}
+                onChangeText={setCustomerName}
+                autoCapitalize="words"
+              />
+            </View>
+          ) : (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Contact Info</Text>
+              
+              <Input
+                label="Customer Name *"
+                placeholder="John Smith"
+                value={customerName}
+                onChangeText={setCustomerName}
+                autoCapitalize="words"
+              />
+              
+              <Input
+                label="Phone Number"
+                placeholder="(555) 123-4567"
+                value={phone}
+                onChangeText={setPhone}
+                keyboardType="phone-pad"
+              />
+              
+              <Input
+                label="Email"
+                placeholder="john@example.com"
+                value={email}
+                onChangeText={setEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+            </View>
+          )}
+
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Contact Info</Text>
-            
-            <Input
-              label="Full Name *"
-              placeholder="John Smith"
-              value={fullName}
-              onChangeText={setFullName}
-              autoCapitalize="words"
-            />
-            
-            <Input
-              label="Phone Number *"
-              placeholder="(555) 123-4567"
-              value={phone}
-              onChangeText={setPhone}
-              keyboardType="phone-pad"
-            />
-            
-            <Input
-              label="Email"
-              placeholder="john@example.com"
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
+            <Text style={styles.sectionTitle}>Lead Source *</Text>
+            {renderSourceSelector()}
           </View>
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Project Details</Text>
-            
-            <Input
-              label="Job Type *"
-              placeholder="e.g., Kitchen Remodel, Roof Repair"
-              value={jobType}
-              onChangeText={setJobType}
-            />
-            
-            <Input
-              label="Quote Amount"
-              placeholder="5000"
-              value={quoteAmount}
-              onChangeText={setQuoteAmount}
-              keyboardType="numeric"
-            />
-          </View>
-
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Communication Preference</Text>
-            
-            <View style={styles.channelContainer}>
-              {CHANNELS.map((channel) => (
+            <Text style={styles.sectionTitle}>Follow-up Plan</Text>
+            <View style={styles.planContainer}>
+              <TouchableOpacity
+                style={[
+                  styles.planChip,
+                  !selectedPlanId && styles.planChipActive
+                ]}
+                onPress={() => setSelectedPlanId(null)}
+              >
+                <Text style={[styles.planText, !selectedPlanId && styles.planTextActive]}>None</Text>
+              </TouchableOpacity>
+              {plans.map((plan) => (
                 <TouchableOpacity
-                  key={channel}
+                  key={plan.id}
                   style={[
-                    styles.channelOption,
-                    preferredChannel === channel && styles.channelOptionActive
+                    styles.planChip,
+                    selectedPlanId === plan.id && styles.planChipActive
                   ]}
-                  onPress={() => setPreferredChannel(channel)}
+                  onPress={() => setSelectedPlanId(plan.id)}
                 >
-                  <Ionicons 
-                    name={channel === 'SMS' ? 'chatbubble' : channel === 'EMAIL' ? 'mail' : 'layers'} 
-                    size={20} 
-                    color={preferredChannel === channel ? '#FFFFFF' : COLORS.textSecondary} 
-                  />
-                  <Text style={[
-                    styles.channelText,
-                    preferredChannel === channel && styles.channelTextActive
-                  ]}>
-                    {CHANNEL_LABELS[channel]}
+                  <Text style={[styles.planText, selectedPlanId === plan.id && styles.planTextActive]}>
+                    {plan.name}
                   </Text>
                 </TouchableOpacity>
               ))}
             </View>
           </View>
 
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Notes</Text>
-            
-            <Input
-              placeholder="Any additional notes..."
-              value={notes}
-              onChangeText={setNotes}
-              multiline
-              numberOfLines={4}
-              style={styles.notesInput}
-            />
-          </View>
+          {!showPasteMode && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Notes</Text>
+              <Input
+                placeholder="Any additional notes..."
+                value={notes}
+                onChangeText={setNotes}
+                multiline
+                numberOfLines={4}
+                style={styles.notesInput}
+              />
+            </View>
+          )}
 
           <Button
             title="Create Lead"
@@ -179,6 +275,33 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: SPACING.md,
   },
+  modeToggle: {
+    flexDirection: 'row',
+    backgroundColor: COLORS.card,
+    borderRadius: 12,
+    padding: 4,
+    marginBottom: SPACING.lg,
+  },
+  modeButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: SPACING.xs,
+    paddingVertical: SPACING.sm,
+    borderRadius: 10,
+  },
+  modeButtonActive: {
+    backgroundColor: COLORS.primary,
+  },
+  modeButtonText: {
+    fontSize: FONTS.sizes.sm,
+    color: COLORS.textSecondary,
+    fontWeight: '500',
+  },
+  modeButtonTextActive: {
+    color: '#FFFFFF',
+  },
   section: {
     marginBottom: SPACING.lg,
   },
@@ -189,33 +312,72 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.sm,
     textTransform: 'uppercase',
   },
-  channelContainer: {
+  sectionHint: {
+    fontSize: FONTS.sizes.xs,
+    color: COLORS.textLight,
+    marginBottom: SPACING.sm,
+  },
+  sourceContainer: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: SPACING.sm,
   },
-  channelOption: {
-    flex: 1,
+  sourceChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: SPACING.xs,
-    paddingVertical: SPACING.md,
-    borderRadius: 12,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderRadius: 20,
     backgroundColor: COLORS.card,
     borderWidth: 2,
+    gap: SPACING.xs,
+  },
+  sourceChipActive: {
+    backgroundColor: COLORS.primary + '15',
+  },
+  sourceDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  sourceText: {
+    fontSize: FONTS.sizes.sm,
+    color: COLORS.textSecondary,
+    fontWeight: '500',
+  },
+  sourceTextActive: {
+    color: COLORS.text,
+    fontWeight: '600',
+  },
+  planContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: SPACING.sm,
+  },
+  planChip: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderRadius: 20,
+    backgroundColor: COLORS.card,
+    borderWidth: 1,
     borderColor: COLORS.border,
   },
-  channelOptionActive: {
+  planChipActive: {
     backgroundColor: COLORS.primary,
     borderColor: COLORS.primary,
   },
-  channelText: {
+  planText: {
     fontSize: FONTS.sizes.sm,
-    fontWeight: '500',
     color: COLORS.textSecondary,
+    fontWeight: '500',
   },
-  channelTextActive: {
+  planTextActive: {
     color: '#FFFFFF',
+  },
+  pasteInput: {
+    height: 150,
+    textAlignVertical: 'top',
+    marginBottom: SPACING.md,
   },
   notesInput: {
     height: 100,

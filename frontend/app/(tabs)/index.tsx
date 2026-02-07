@@ -7,25 +7,31 @@ import {
   RefreshControl,
   TouchableOpacity
 } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { dashboardAPI } from '../../src/api';
+import { analyticsAPI, leadsAPI } from '../../src/api';
 import { useAuthStore } from '../../src/store/authStore';
 import { StatCard } from '../../src/components/StatCard';
-import { COLORS, SPACING, FONTS, SHADOWS, STATUS_COLORS, STATUS_LABELS } from '../../src/constants/theme';
-import { DashboardStats } from '../../src/types';
+import { COLORS, SPACING, FONTS, SHADOWS, STATUS_COLORS, STATUS_LABELS, formatCurrency, formatPercent } from '../../src/constants/theme';
+import { AnalyticsSummary, LeadListItem } from '../../src/types';
 
 export default function DashboardScreen() {
-  const { business } = useAuthStore();
-  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const router = useRouter();
+  const { user } = useAuthStore();
+  const [analytics, setAnalytics] = useState<AnalyticsSummary | null>(null);
+  const [recentLeads, setRecentLeads] = useState<LeadListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const loadStats = async () => {
+  const loadData = async () => {
     try {
-      const response = await dashboardAPI.getStats();
-      setStats(response.data);
+      const [analyticsRes, leadsRes] = await Promise.all([
+        analyticsAPI.getSummary(),
+        leadsAPI.getAll({ limit: 5 }),
+      ]);
+      setAnalytics(analyticsRes.data);
+      setRecentLeads(leadsRes.data);
     } catch (error) {
       console.log('Error loading dashboard:', error);
     } finally {
@@ -36,13 +42,13 @@ export default function DashboardScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      loadStats();
+      loadData();
     }, [])
   );
 
   const onRefresh = () => {
     setRefreshing(true);
-    loadStats();
+    loadData();
   };
 
   return (
@@ -57,7 +63,7 @@ export default function DashboardScreen() {
         <View style={styles.header}>
           <View>
             <Text style={styles.greeting}>Welcome back,</Text>
-            <Text style={styles.businessName}>{business?.business_name || 'Your Business'}</Text>
+            <Text style={styles.businessName}>{user?.business_name || user?.pro_name || 'Pro'}</Text>
           </View>
           <View style={styles.logoContainer}>
             <Ionicons name="flash" size={28} color={COLORS.primary} />
@@ -67,53 +73,128 @@ export default function DashboardScreen() {
         {/* Stats Cards */}
         <View style={styles.statsRow}>
           <StatCard
-            title="Today's Follow-ups"
-            value={stats?.todays_followups || 0}
-            icon="calendar"
+            title="Total Leads"
+            value={analytics?.total_leads || 0}
+            icon="people"
             color={COLORS.primary}
           />
           <StatCard
-            title="Hot Leads"
-            value={stats?.hot_leads || 0}
-            icon="flame"
-            color={COLORS.warning}
+            title="Won Deals"
+            value={analytics?.total_won || 0}
+            icon="trophy"
+            color={COLORS.success}
           />
         </View>
 
-        {/* Money at Risk */}
-        <View style={styles.moneyCard}>
-          <View style={styles.moneyHeader}>
+        {/* Revenue Card */}
+        <View style={styles.revenueCard}>
+          <View style={styles.revenueHeader}>
             <Ionicons name="cash" size={24} color={COLORS.secondary} />
-            <Text style={styles.moneyTitle}>Money at Risk</Text>
+            <Text style={styles.revenueTitle}>Total Revenue</Text>
           </View>
-          <Text style={styles.moneyValue}>
-            ${(stats?.money_at_risk || 0).toLocaleString()}
+          <Text style={styles.revenueValue}>
+            {formatCurrency(analytics?.total_revenue_cents || 0)}
           </Text>
-          <Text style={styles.moneySubtitle}>From active leads</Text>
-        </View>
-
-        {/* Pipeline */}
-        <View style={styles.pipelineCard}>
-          <Text style={styles.sectionTitle}>Pipeline Overview</Text>
-          <View style={styles.pipelineGrid}>
-            {Object.entries(stats?.pipeline_counts || {}).map(([status, count]) => (
-              <View key={status} style={styles.pipelineItem}>
-                <View style={[styles.pipelineDot, { backgroundColor: STATUS_COLORS[status] }]} />
-                <Text style={styles.pipelineLabel}>{STATUS_LABELS[status]}</Text>
-                <Text style={styles.pipelineCount}>{count}</Text>
+          <View style={styles.revenueStats}>
+            <View style={styles.revenueStat}>
+              <Text style={styles.revenueStatLabel}>Close Rate</Text>
+              <Text style={styles.revenueStatValue}>
+                {formatPercent(analytics?.overall_close_rate || 0)}
+              </Text>
+            </View>
+            {analytics?.overall_roi !== null && analytics?.overall_roi !== undefined && (
+              <View style={styles.revenueStat}>
+                <Text style={styles.revenueStatLabel}>ROI</Text>
+                <Text style={[styles.revenueStatValue, { color: analytics.overall_roi >= 0 ? COLORS.success : COLORS.error }]}>
+                  {formatPercent(analytics.overall_roi)}
+                </Text>
               </View>
-            ))}
+            )}
           </View>
         </View>
 
-        {/* Quick Tips */}
+        {/* Pipeline Overview */}
+        <View style={styles.pipelineCard}>
+          <View style={styles.cardHeader}>
+            <Text style={styles.sectionTitle}>Pipeline Overview</Text>
+          </View>
+          <View style={styles.pipelineGrid}>
+            <View style={styles.pipelineItem}>
+              <View style={[styles.pipelineDot, { backgroundColor: STATUS_COLORS.NEW }]} />
+              <Text style={styles.pipelineLabel}>New</Text>
+              <Text style={styles.pipelineCount}>
+                {analytics?.by_source.reduce((sum, s) => sum + s.new_leads, 0) || 0}
+              </Text>
+            </View>
+            <View style={styles.pipelineItem}>
+              <View style={[styles.pipelineDot, { backgroundColor: STATUS_COLORS.CONTACTED }]} />
+              <Text style={styles.pipelineLabel}>Contacted</Text>
+              <Text style={styles.pipelineCount}>
+                {analytics?.by_source.reduce((sum, s) => sum + s.contacted_leads, 0) || 0}
+              </Text>
+            </View>
+            <View style={styles.pipelineItem}>
+              <View style={[styles.pipelineDot, { backgroundColor: STATUS_COLORS.BOOKED }]} />
+              <Text style={styles.pipelineLabel}>Booked</Text>
+              <Text style={styles.pipelineCount}>{analytics?.total_booked || 0}</Text>
+            </View>
+            <View style={styles.pipelineItem}>
+              <View style={[styles.pipelineDot, { backgroundColor: STATUS_COLORS.WON }]} />
+              <Text style={styles.pipelineLabel}>Won</Text>
+              <Text style={styles.pipelineCount}>{analytics?.total_won || 0}</Text>
+            </View>
+            <View style={styles.pipelineItem}>
+              <View style={[styles.pipelineDot, { backgroundColor: STATUS_COLORS.LOST }]} />
+              <Text style={styles.pipelineLabel}>Lost</Text>
+              <Text style={styles.pipelineCount}>{analytics?.total_lost || 0}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Recent Leads */}
+        <View style={styles.recentCard}>
+          <View style={styles.cardHeader}>
+            <Text style={styles.sectionTitle}>Recent Leads</Text>
+            <TouchableOpacity onPress={() => router.push('/(tabs)/leads')}>
+              <Text style={styles.viewAllText}>View All</Text>
+            </TouchableOpacity>
+          </View>
+          {recentLeads.length === 0 ? (
+            <Text style={styles.noLeadsText}>No leads yet. Add your first lead!</Text>
+          ) : (
+            recentLeads.map((lead) => (
+              <TouchableOpacity 
+                key={lead.id} 
+                style={styles.recentLeadItem}
+                onPress={() => router.push(`/lead/${lead.id}`)}
+              >
+                <View style={styles.recentLeadInfo}>
+                  <Text style={styles.recentLeadName} numberOfLines={1}>{lead.customer_name}</Text>
+                  {lead.lead_source && (
+                    <View style={styles.recentLeadSource}>
+                      <View style={[styles.sourceDot, { backgroundColor: lead.lead_source.color }]} />
+                      <Text style={styles.recentLeadSourceName}>{lead.lead_source.name}</Text>
+                    </View>
+                  )}
+                </View>
+                <View style={[styles.statusBadge, { backgroundColor: STATUS_COLORS[lead.status] + '20' }]}>
+                  <Text style={[styles.statusText, { color: STATUS_COLORS[lead.status] }]}>
+                    {STATUS_LABELS[lead.status]}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))
+          )}
+        </View>
+
+        {/* Quick Tip */}
         <View style={styles.tipsCard}>
           <View style={styles.tipsHeader}>
             <Ionicons name="bulb" size={20} color={COLORS.warning} />
             <Text style={styles.tipsTitle}>Quick Tip</Text>
           </View>
           <Text style={styles.tipsText}>
-            Assign sequences to new leads to automatically follow up until they respond!
+            Track your lead sources to see which marketing channels bring the best ROI!
           </Text>
         </View>
       </ScrollView>
@@ -157,32 +238,42 @@ const styles = StyleSheet.create({
     gap: SPACING.md,
     marginBottom: SPACING.md,
   },
-  moneyCard: {
+  revenueCard: {
     backgroundColor: COLORS.card,
     borderRadius: 16,
     padding: SPACING.lg,
     marginBottom: SPACING.md,
     ...SHADOWS.md,
   },
-  moneyHeader: {
+  revenueHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: SPACING.sm,
     marginBottom: SPACING.sm,
   },
-  moneyTitle: {
+  revenueTitle: {
     fontSize: FONTS.sizes.md,
     color: COLORS.textSecondary,
   },
-  moneyValue: {
+  revenueValue: {
     fontSize: 36,
     fontWeight: '700',
     color: COLORS.secondary,
   },
-  moneySubtitle: {
-    fontSize: FONTS.sizes.sm,
+  revenueStats: {
+    flexDirection: 'row',
+    marginTop: SPACING.md,
+    gap: SPACING.lg,
+  },
+  revenueStat: {},
+  revenueStatLabel: {
+    fontSize: FONTS.sizes.xs,
     color: COLORS.textLight,
-    marginTop: SPACING.xs,
+  },
+  revenueStatValue: {
+    fontSize: FONTS.sizes.lg,
+    fontWeight: '600',
+    color: COLORS.text,
   },
   pipelineCard: {
     backgroundColor: COLORS.card,
@@ -191,11 +282,21 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.md,
     ...SHADOWS.md,
   },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: SPACING.md,
+  },
   sectionTitle: {
     fontSize: FONTS.sizes.lg,
     fontWeight: '600',
     color: COLORS.text,
-    marginBottom: SPACING.md,
+  },
+  viewAllText: {
+    fontSize: FONTS.sizes.sm,
+    color: COLORS.primary,
+    fontWeight: '500',
   },
   pipelineGrid: {
     gap: SPACING.sm,
@@ -219,6 +320,59 @@ const styles = StyleSheet.create({
     fontSize: FONTS.sizes.md,
     fontWeight: '600',
     color: COLORS.text,
+  },
+  recentCard: {
+    backgroundColor: COLORS.card,
+    borderRadius: 16,
+    padding: SPACING.lg,
+    marginBottom: SPACING.md,
+    ...SHADOWS.md,
+  },
+  noLeadsText: {
+    fontSize: FONTS.sizes.sm,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    paddingVertical: SPACING.md,
+  },
+  recentLeadItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: SPACING.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  recentLeadInfo: {
+    flex: 1,
+  },
+  recentLeadName: {
+    fontSize: FONTS.sizes.md,
+    fontWeight: '500',
+    color: COLORS.text,
+  },
+  recentLeadSource: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.xs,
+    marginTop: 2,
+  },
+  sourceDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  recentLeadSourceName: {
+    fontSize: FONTS.sizes.xs,
+    color: COLORS.textSecondary,
+  },
+  statusBadge: {
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.xs,
+    borderRadius: 8,
+  },
+  statusText: {
+    fontSize: FONTS.sizes.xs,
+    fontWeight: '600',
   },
   tipsCard: {
     backgroundColor: COLORS.warning + '15',
