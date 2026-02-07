@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Convert sync URL to async URL
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://followup_user:followup_pass@localhost:5432/followup_db")
 ASYNC_DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
 

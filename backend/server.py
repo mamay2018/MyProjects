@@ -1,61 +1,52 @@
+"""FollowUp Pro v2 - FastAPI Server"""
 import os
-import asyncio
 from datetime import datetime, timedelta
+from typing import Optional, List
+from uuid import UUID
 from contextlib import asynccontextmanager
-from typing import List, Optional
-from fastapi import FastAPI, Depends, HTTPException, status, Request, Form, Query
+
+from fastapi import FastAPI, Depends, HTTPException, status, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, or_
-from sqlalchemy.orm import selectinload
 from dotenv import load_dotenv
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 load_dotenv()
 
-from database import get_db, init_db, async_session_maker
-from models import (
-    User, Business, Lead, Sequence, SequenceStep, MessageLog, Subscription,
-    LeadStatus, Channel, MessageDirection, MessageStatus, SubscriptionStatus, SubscriptionPlan
+import models
+import schemas
+import crud
+from database import get_db, init_db
+from auth import (
+    get_password_hash, verify_password, create_access_token, 
+    get_current_user, oauth2_scheme
 )
-from schemas import (
-    UserCreate, UserLogin, Token, UserResponse,
-    BusinessCreate, BusinessUpdate, BusinessResponse,
-    LeadCreate, LeadUpdate, LeadResponse, AssignSequence,
-    SequenceCreate, SequenceUpdate, SequenceResponse, SequenceStepCreate, SequenceStepResponse,
-    MessageLogResponse, ManualMessageSend,
-    DashboardStats,
-    AIRewriteRequest, AIRewriteResponse,
-    SubscriptionResponse, CheckoutSessionResponse, CustomerPortalResponse,
-    PushTokenUpdate
-)
-from auth import get_password_hash, verify_password, create_access_token, get_current_user
-from services.messaging import send_sms, send_email, replace_template_variables, normalize_phone
-from services.ai_rewrite import rewrite_message
-from services.stripe_service import (
-    create_checkout_session, create_customer_portal_session, 
-    verify_webhook_signature, PLAN_CONFIG
-)
+from services.messaging import MessagingService
+from services.push_notifications import PushNotificationService
+from services.ics_generator import generate_ics
 
-# Scheduler for background tasks
-scheduler = AsyncIOScheduler()
+# Configuration
+MOCK_MODE = os.getenv("MOCK_MODE", "true").lower() == "true"
+APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:8001")
+PUBLIC_BOOKING_BASE_URL = os.getenv("PUBLIC_BOOKING_BASE_URL", f"{APP_BASE_URL}/book")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     await init_db()
-    await seed_builtin_sequences()
-    
-    # Start the scheduler
-    scheduler.add_job(process_followups, 'interval', minutes=1, id='followup_worker')
-    scheduler.start()
-    
+    print(f"\n🚀 FollowUp Pro v2 API started (MOCK_MODE={MOCK_MODE})\n")
     yield
-    
     # Shutdown
-    scheduler.shutdown()
+    print("\n👋 FollowUp Pro v2 API shutting down\n")
 
-app = FastAPI(title="FollowUp Pro API", version="1.0.0", lifespan=lifespan)
+
+app = FastAPI(
+    title="FollowUp Pro v2 API",
+    description="API for service professionals to manage leads, follow-ups, and bookings",
+    version="2.0.0",
+    lifespan=lifespan
+)
 
 # CORS
 app.add_middleware(
@@ -66,1157 +57,890 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ==================== SEED DATA ====================
 
-async def seed_builtin_sequences():
-    """Seed the built-in sequences if they don't exist"""
-    async with async_session_maker() as db:
-        # Check if built-in sequences exist
-        result = await db.execute(select(Sequence).where(Sequence.is_builtin == True))
-        existing = result.scalars().all()
-        
-        if existing:
-            return  # Already seeded
-        
-        # Friendly Sequence
-        friendly = Sequence(
-            name="Friendly",
-            is_builtin=True,
-            business_id=None
-        )
-        db.add(friendly)
-        await db.flush()
-        
-        friendly_steps = [
-            SequenceStep(sequence_id=friendly.id, day_offset=0, channel=Channel.SMS, step_order=0,
-                        message_template="Hey {firstName}! Just wanted to follow up on the {jobType} we discussed. Let me know if you have any questions! - {businessName}"),
-            SequenceStep(sequence_id=friendly.id, day_offset=2, channel=Channel.EMAIL, step_order=1,
-                        email_subject="Quick Follow-up on Your {jobType}",
-                        message_template="Hi {firstName},\n\nI hope you're doing well! I wanted to check in about the {jobType} quote I sent over. Happy to answer any questions you might have.\n\nBest,\n{businessName}"),
-            SequenceStep(sequence_id=friendly.id, day_offset=5, channel=Channel.SMS, step_order=2,
-                        message_template="Hi {firstName}! Still thinking about the {jobType}? I'm here to help whenever you're ready! 😊 - {businessName}"),
-        ]
-        db.add_all(friendly_steps)
-        
-        # Professional Sequence
-        professional = Sequence(
-            name="Professional",
-            is_builtin=True,
-            business_id=None
-        )
-        db.add(professional)
-        await db.flush()
-        
-        professional_steps = [
-            SequenceStep(sequence_id=professional.id, day_offset=0, channel=Channel.SMS, step_order=0,
-                        message_template="Hello {firstName}, this is {businessName}. I'm following up on our {jobType} discussion. Please let me know if you need any additional information."),
-            SequenceStep(sequence_id=professional.id, day_offset=3, channel=Channel.EMAIL, step_order=1,
-                        email_subject="Follow-up: {jobType} Proposal",
-                        message_template="Dear {firstName},\n\nI wanted to follow up regarding the {jobType} proposal for {quoteAmount}. I'm available to discuss any details or answer questions at your convenience.\n\nBest regards,\n{businessName}"),
-            SequenceStep(sequence_id=professional.id, day_offset=7, channel=Channel.SMS, step_order=2,
-                        message_template="{firstName}, I haven't heard back regarding your {jobType} project. If you have any concerns, please feel free to reach out. - {businessName}"),
-        ]
-        db.add_all(professional_steps)
-        
-        # Urgent/Scarcity Sequence
-        urgent = Sequence(
-            name="Urgent / Scarcity",
-            is_builtin=True,
-            business_id=None
-        )
-        db.add(urgent)
-        await db.flush()
-        
-        urgent_steps = [
-            SequenceStep(sequence_id=urgent.id, day_offset=0, channel=Channel.SMS, step_order=0,
-                        message_template="Hi {firstName}! Quick heads up - we have limited availability for {jobType} this month. Let me know ASAP if you want to secure your spot! - {businessName}"),
-            SequenceStep(sequence_id=urgent.id, day_offset=1, channel=Channel.EMAIL, step_order=1,
-                        email_subject="⚡ Time-Sensitive: Your {jobType} Quote",
-                        message_template="Hi {firstName},\n\nI wanted to let you know that our schedule is filling up fast. Your {quoteAmount} quote for {jobType} is valid for the next few days.\n\nDon't miss out - reply to lock in your spot!\n\n{businessName}"),
-            SequenceStep(sequence_id=urgent.id, day_offset=3, channel=Channel.SMS, step_order=2,
-                        message_template="Last chance {firstName}! Your {jobType} quote expires soon. Text me back to confirm before we book someone else! - {businessName}"),
-        ]
-        db.add_all(urgent_steps)
-        
-        await db.commit()
-        print("Built-in sequences seeded successfully!")
-
-# ==================== FOLLOW-UP WORKER ====================
-
-async def process_followups():
-    """Background worker to process scheduled follow-ups"""
-    async with async_session_maker() as db:
-        try:
-            now = datetime.utcnow()
-            
-            # Find leads that need follow-up
-            result = await db.execute(
-                select(Lead)
-                .options(selectinload(Lead.sequence).selectinload(Sequence.steps))
-                .options(selectinload(Lead.business))
-                .where(
-                    and_(
-                        Lead.status == LeadStatus.FOLLOWING_UP,
-                        Lead.next_followup_at <= now,
-                        Lead.current_sequence_id.isnot(None)
-                    )
-                )
-            )
-            leads = result.scalars().all()
-            
-            for lead in leads:
-                await send_followup(db, lead)
-            
-            if leads:
-                await db.commit()
-                
-        except Exception as e:
-            print(f"Follow-up worker error: {e}")
-            await db.rollback()
-
-async def send_followup(db: AsyncSession, lead: Lead):
-    """Send the next follow-up message for a lead"""
-    if not lead.sequence or not lead.sequence.steps:
-        return
-    
-    # Get the current step
-    steps = sorted(lead.sequence.steps, key=lambda x: x.step_order)
-    if lead.current_step_index >= len(steps):
-        # Sequence complete - mark as ghosted
-        lead.status = LeadStatus.GHOSTED
-        lead.next_followup_at = None
-        return
-    
-    current_step = steps[lead.current_step_index]
-    
-    # Get business data for template
-    business_data = {
-        'business_name': lead.business.business_name if lead.business else 'Our Team'
-    }
-    lead_data = {
-        'full_name': lead.full_name,
-        'job_type': lead.job_type,
-        'quote_amount': lead.quote_amount
-    }
-    
-    # Replace template variables
-    message_body = replace_template_variables(current_step.message_template, lead_data, business_data)
-    
-    # Determine which channel to use
-    channels_to_send = []
-    if lead.preferred_channel == Channel.BOTH:
-        channels_to_send = [Channel.SMS, Channel.EMAIL] if current_step.channel == Channel.BOTH else [current_step.channel]
-    elif lead.preferred_channel == Channel.SMS and current_step.channel in [Channel.SMS, Channel.BOTH]:
-        channels_to_send = [Channel.SMS]
-    elif lead.preferred_channel == Channel.EMAIL and current_step.channel in [Channel.EMAIL, Channel.BOTH]:
-        channels_to_send = [Channel.EMAIL]
-    else:
-        channels_to_send = [current_step.channel]
-    
-    for channel in channels_to_send:
-        if channel == Channel.SMS and lead.phone:
-            success, msg_id, error = await send_sms(lead.phone, message_body)
-            
-            log = MessageLog(
-                lead_id=lead.id,
-                direction=MessageDirection.OUTBOUND,
-                channel=Channel.SMS,
-                body=message_body,
-                status=MessageStatus.SENT if success else MessageStatus.FAILED,
-                provider_message_id=msg_id,
-                error=error
-            )
-            db.add(log)
-            
-        elif channel == Channel.EMAIL and lead.email:
-            subject = current_step.email_subject or f"Follow-up: {lead.job_type}"
-            subject = replace_template_variables(subject, lead_data, business_data)
-            success, msg_id, error = await send_email(lead.email, subject, message_body)
-            
-            log = MessageLog(
-                lead_id=lead.id,
-                direction=MessageDirection.OUTBOUND,
-                channel=Channel.EMAIL,
-                body=message_body,
-                subject=subject,
-                status=MessageStatus.SENT if success else MessageStatus.FAILED,
-                provider_message_id=msg_id,
-                error=error
-            )
-            db.add(log)
-    
-    # Update lead for next step
-    lead.current_step_index += 1
-    lead.last_contact_at = datetime.utcnow()
-    
-    # Schedule next follow-up if there are more steps
-    if lead.current_step_index < len(steps):
-        next_step = steps[lead.current_step_index]
-        days_until_next = next_step.day_offset - current_step.day_offset
-        lead.next_followup_at = datetime.utcnow() + timedelta(days=max(days_until_next, 1))
-    else:
-        # No more steps
-        lead.status = LeadStatus.GHOSTED
-        lead.next_followup_at = None
-
-# ==================== AUTH ROUTES ====================
-
-@app.post("/api/auth/signup", response_model=Token)
-async def signup(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
-    # Check if user exists
-    result = await db.execute(select(User).where(User.email == user_data.email))
-    if result.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    # Create user
-    hashed_password = get_password_hash(user_data.password)
-    user = User(email=user_data.email, password_hash=hashed_password)
-    db.add(user)
-    await db.commit()
-    await db.refresh(user)
-    
-    # Create default subscription (inactive)
-    subscription = Subscription(user_id=user.id, status=SubscriptionStatus.INACTIVE)
-    db.add(subscription)
-    await db.commit()
-    
-    # Generate token
-    access_token = create_access_token(data={"sub": str(user.id)})
-    return {"access_token": access_token, "token_type": "bearer"}
-
-@app.post("/api/auth/login", response_model=Token)
-async def login(user_data: UserLogin, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == user_data.email))
-    user = result.scalar_one_or_none()
-    
-    if not user or not verify_password(user_data.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    
-    access_token = create_access_token(data={"sub": str(user.id)})
-    return {"access_token": access_token, "token_type": "bearer"}
-
-@app.get("/api/auth/me", response_model=UserResponse)
-async def get_me(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    # Get business info
-    result = await db.execute(select(Business).where(Business.user_id == current_user.id))
-    business = result.scalar_one_or_none()
-    
-    # Get subscription info
-    result = await db.execute(select(Subscription).where(Subscription.user_id == current_user.id))
-    subscription = result.scalar_one_or_none()
-    
-    return UserResponse(
-        id=current_user.id,
-        email=current_user.email,
-        created_at=current_user.created_at,
-        has_business=business is not None,
-        subscription_status=subscription.status.value if subscription else None,
-        subscription_plan=subscription.plan.value if subscription and subscription.plan else None
-    )
-
-@app.post("/api/auth/push-token")
-async def update_push_token(
-    data: PushTokenUpdate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    current_user.expo_push_token = data.expo_push_token
-    await db.commit()
-    return {"status": "ok"}
-
-# ==================== BUSINESS ROUTES ====================
-
-@app.post("/api/business", response_model=BusinessResponse)
-async def create_business(
-    business_data: BusinessCreate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    # Check if business exists
-    result = await db.execute(select(Business).where(Business.user_id == current_user.id))
-    if result.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Business profile already exists")
-    
-    business = Business(
-        user_id=current_user.id,
-        **business_data.model_dump()
-    )
-    db.add(business)
-    await db.commit()
-    await db.refresh(business)
-    
-    return business
-
-@app.get("/api/business", response_model=BusinessResponse)
-async def get_business(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(select(Business).where(Business.user_id == current_user.id))
-    business = result.scalar_one_or_none()
-    
-    if not business:
-        raise HTTPException(status_code=404, detail="Business profile not found")
-    
-    return business
-
-@app.put("/api/business", response_model=BusinessResponse)
-async def update_business(
-    business_data: BusinessUpdate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(select(Business).where(Business.user_id == current_user.id))
-    business = result.scalar_one_or_none()
-    
-    if not business:
-        raise HTTPException(status_code=404, detail="Business profile not found")
-    
-    update_data = business_data.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(business, key, value)
-    
-    await db.commit()
-    await db.refresh(business)
-    
-    return business
-
-# ==================== LEAD ROUTES ====================
-
-async def check_lead_limit(db: AsyncSession, user_id: int):
-    """Check if user has reached their lead limit"""
-    # Get subscription
-    result = await db.execute(select(Subscription).where(Subscription.user_id == user_id))
-    subscription = result.scalar_one_or_none()
-    
-    if not subscription:
-        limit = 50  # Default limit
-    else:
-        limit = subscription.active_lead_limit
-    
-    # Get business
-    result = await db.execute(select(Business).where(Business.user_id == user_id))
-    business = result.scalar_one_or_none()
-    
-    if not business:
-        return  # No business yet, can't have leads
-    
-    # Count active leads
-    result = await db.execute(
-        select(func.count(Lead.id))
-        .where(
-            and_(
-                Lead.business_id == business.id,
-                Lead.status.in_([LeadStatus.NEW, LeadStatus.FOLLOWING_UP, LeadStatus.REPLIED])
-            )
-        )
-    )
-    active_count = result.scalar() or 0
-    
-    if active_count >= limit:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Lead limit reached ({limit}). Please upgrade your plan to add more leads."
-        )
-
-@app.get("/api/leads", response_model=List[LeadResponse])
-async def get_leads(
-    status: Optional[str] = None,
-    search: Optional[str] = None,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    # Get business
-    result = await db.execute(select(Business).where(Business.user_id == current_user.id))
-    business = result.scalar_one_or_none()
-    
-    if not business:
-        return []
-    
-    query = select(Lead).where(Lead.business_id == business.id)
-    
-    if status:
-        query = query.where(Lead.status == status)
-    
-    if search:
-        query = query.where(
-            or_(
-                Lead.full_name.ilike(f"%{search}%"),
-                Lead.phone.ilike(f"%{search}%"),
-                Lead.email.ilike(f"%{search}%"),
-                Lead.job_type.ilike(f"%{search}%")
-            )
-        )
-    
-    query = query.order_by(Lead.created_at.desc())
-    
-    result = await db.execute(query)
-    return result.scalars().all()
-
-@app.post("/api/leads", response_model=LeadResponse)
-async def create_lead(
-    lead_data: LeadCreate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    # Check lead limit
-    await check_lead_limit(db, current_user.id)
-    
-    # Get business
-    result = await db.execute(select(Business).where(Business.user_id == current_user.id))
-    business = result.scalar_one_or_none()
-    
-    if not business:
-        raise HTTPException(status_code=400, detail="Create a business profile first")
-    
-    lead = Lead(
-        business_id=business.id,
-        **lead_data.model_dump()
-    )
-    db.add(lead)
-    await db.commit()
-    await db.refresh(lead)
-    
-    return lead
-
-@app.get("/api/leads/{lead_id}", response_model=LeadResponse)
-async def get_lead(
-    lead_id: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(select(Business).where(Business.user_id == current_user.id))
-    business = result.scalar_one_or_none()
-    
-    if not business:
-        raise HTTPException(status_code=404, detail="Lead not found")
-    
-    result = await db.execute(
-        select(Lead).where(and_(Lead.id == lead_id, Lead.business_id == business.id))
-    )
-    lead = result.scalar_one_or_none()
-    
-    if not lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
-    
-    return lead
-
-@app.put("/api/leads/{lead_id}", response_model=LeadResponse)
-async def update_lead(
-    lead_id: int,
-    lead_data: LeadUpdate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(select(Business).where(Business.user_id == current_user.id))
-    business = result.scalar_one_or_none()
-    
-    if not business:
-        raise HTTPException(status_code=404, detail="Lead not found")
-    
-    result = await db.execute(
-        select(Lead).where(and_(Lead.id == lead_id, Lead.business_id == business.id))
-    )
-    lead = result.scalar_one_or_none()
-    
-    if not lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
-    
-    update_data = lead_data.model_dump(exclude_unset=True)
-    
-    # If status is being changed to WON/LOST/REPLIED, stop automation
-    if 'status' in update_data and update_data['status'] in [LeadStatus.WON, LeadStatus.LOST, LeadStatus.REPLIED]:
-        lead.next_followup_at = None
-        lead.current_sequence_id = None
-    
-    for key, value in update_data.items():
-        setattr(lead, key, value)
-    
-    await db.commit()
-    await db.refresh(lead)
-    
-    return lead
-
-@app.delete("/api/leads/{lead_id}")
-async def delete_lead(
-    lead_id: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(select(Business).where(Business.user_id == current_user.id))
-    business = result.scalar_one_or_none()
-    
-    if not business:
-        raise HTTPException(status_code=404, detail="Lead not found")
-    
-    result = await db.execute(
-        select(Lead).where(and_(Lead.id == lead_id, Lead.business_id == business.id))
-    )
-    lead = result.scalar_one_or_none()
-    
-    if not lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
-    
-    # Delete message logs first
-    await db.execute(
-        MessageLog.__table__.delete().where(MessageLog.lead_id == lead_id)
-    )
-    
-    await db.delete(lead)
-    await db.commit()
-    
-    return {"status": "deleted"}
-
-@app.post("/api/leads/{lead_id}/assign-sequence", response_model=LeadResponse)
-async def assign_sequence_to_lead(
-    lead_id: int,
-    data: AssignSequence,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(select(Business).where(Business.user_id == current_user.id))
-    business = result.scalar_one_or_none()
-    
-    if not business:
-        raise HTTPException(status_code=404, detail="Lead not found")
-    
-    # Get lead
-    result = await db.execute(
-        select(Lead).where(and_(Lead.id == lead_id, Lead.business_id == business.id))
-    )
-    lead = result.scalar_one_or_none()
-    
-    if not lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
-    
-    # Verify sequence exists and user has access
-    result = await db.execute(
-        select(Sequence)
-        .options(selectinload(Sequence.steps))
-        .where(
-            and_(
-                Sequence.id == data.sequence_id,
-                or_(Sequence.is_builtin == True, Sequence.business_id == business.id)
-            )
-        )
-    )
-    sequence = result.scalar_one_or_none()
-    
-    if not sequence:
-        raise HTTPException(status_code=404, detail="Sequence not found")
-    
-    # Assign sequence and start automation
-    lead.current_sequence_id = sequence.id
-    lead.current_step_index = 0
-    lead.status = LeadStatus.FOLLOWING_UP
-    
-    # Schedule first follow-up immediately (or based on first step's day_offset)
-    if sequence.steps:
-        first_step = sorted(sequence.steps, key=lambda x: x.step_order)[0]
-        lead.next_followup_at = datetime.utcnow() + timedelta(days=first_step.day_offset)
-    
-    await db.commit()
-    await db.refresh(lead)
-    
-    return lead
-
-# ==================== SEQUENCE ROUTES ====================
-
-@app.get("/api/sequences", response_model=List[SequenceResponse])
-async def get_sequences(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    # Get business
-    result = await db.execute(select(Business).where(Business.user_id == current_user.id))
-    business = result.scalar_one_or_none()
-    
-    # Get built-in sequences + user's custom sequences
-    if business:
-        query = select(Sequence).options(selectinload(Sequence.steps)).where(
-            or_(Sequence.is_builtin == True, Sequence.business_id == business.id)
-        )
-    else:
-        query = select(Sequence).options(selectinload(Sequence.steps)).where(Sequence.is_builtin == True)
-    
-    result = await db.execute(query)
-    sequences = result.scalars().all()
-    
-    return sequences
-
-@app.post("/api/sequences", response_model=SequenceResponse)
-async def create_sequence(
-    sequence_data: SequenceCreate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    # Get business
-    result = await db.execute(select(Business).where(Business.user_id == current_user.id))
-    business = result.scalar_one_or_none()
-    
-    if not business:
-        raise HTTPException(status_code=400, detail="Create a business profile first")
-    
-    # Create sequence
-    sequence = Sequence(
-        business_id=business.id,
-        name=sequence_data.name,
-        is_builtin=False
-    )
-    db.add(sequence)
-    await db.flush()
-    
-    # Create steps
-    for step_data in sequence_data.steps:
-        step = SequenceStep(
-            sequence_id=sequence.id,
-            **step_data.model_dump()
-        )
-        db.add(step)
-    
-    await db.commit()
-    
-    # Reload with steps
-    result = await db.execute(
-        select(Sequence).options(selectinload(Sequence.steps)).where(Sequence.id == sequence.id)
-    )
-    sequence = result.scalar_one()
-    
-    return sequence
-
-@app.get("/api/sequences/{sequence_id}", response_model=SequenceResponse)
-async def get_sequence(
-    sequence_id: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(select(Business).where(Business.user_id == current_user.id))
-    business = result.scalar_one_or_none()
-    
-    result = await db.execute(
-        select(Sequence)
-        .options(selectinload(Sequence.steps))
-        .where(
-            and_(
-                Sequence.id == sequence_id,
-                or_(Sequence.is_builtin == True, Sequence.business_id == (business.id if business else None))
-            )
-        )
-    )
-    sequence = result.scalar_one_or_none()
-    
-    if not sequence:
-        raise HTTPException(status_code=404, detail="Sequence not found")
-    
-    return sequence
-
-@app.delete("/api/sequences/{sequence_id}")
-async def delete_sequence(
-    sequence_id: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(select(Business).where(Business.user_id == current_user.id))
-    business = result.scalar_one_or_none()
-    
-    if not business:
-        raise HTTPException(status_code=404, detail="Sequence not found")
-    
-    result = await db.execute(
-        select(Sequence).where(
-            and_(Sequence.id == sequence_id, Sequence.business_id == business.id, Sequence.is_builtin == False)
-        )
-    )
-    sequence = result.scalar_one_or_none()
-    
-    if not sequence:
-        raise HTTPException(status_code=404, detail="Sequence not found or cannot delete built-in sequence")
-    
-    # Delete steps first
-    await db.execute(
-        SequenceStep.__table__.delete().where(SequenceStep.sequence_id == sequence_id)
-    )
-    
-    await db.delete(sequence)
-    await db.commit()
-    
-    return {"status": "deleted"}
-
-# ==================== MESSAGE/CONVERSATION ROUTES ====================
-
-@app.get("/api/leads/{lead_id}/messages", response_model=List[MessageLogResponse])
-async def get_lead_messages(
-    lead_id: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(select(Business).where(Business.user_id == current_user.id))
-    business = result.scalar_one_or_none()
-    
-    if not business:
-        return []
-    
-    # Verify lead belongs to user
-    result = await db.execute(
-        select(Lead).where(and_(Lead.id == lead_id, Lead.business_id == business.id))
-    )
-    lead = result.scalar_one_or_none()
-    
-    if not lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
-    
-    result = await db.execute(
-        select(MessageLog)
-        .where(MessageLog.lead_id == lead_id)
-        .order_by(MessageLog.timestamp.asc())
-    )
-    
-    return result.scalars().all()
-
-@app.post("/api/leads/{lead_id}/messages", response_model=MessageLogResponse)
-async def send_manual_message(
-    lead_id: int,
-    message_data: ManualMessageSend,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(select(Business).where(Business.user_id == current_user.id))
-    business = result.scalar_one_or_none()
-    
-    if not business:
-        raise HTTPException(status_code=404, detail="Lead not found")
-    
-    result = await db.execute(
-        select(Lead).where(and_(Lead.id == lead_id, Lead.business_id == business.id))
-    )
-    lead = result.scalar_one_or_none()
-    
-    if not lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
-    
-    # Send message
-    if message_data.channel == Channel.SMS:
-        success, msg_id, error = await send_sms(lead.phone, message_data.body)
-    else:
-        success, msg_id, error = await send_email(lead.email or "", "Follow-up", message_data.body)
-    
-    # Log message
-    log = MessageLog(
-        lead_id=lead.id,
-        direction=MessageDirection.OUTBOUND,
-        channel=message_data.channel,
-        body=message_data.body,
-        status=MessageStatus.SENT if success else MessageStatus.FAILED,
-        provider_message_id=msg_id,
-        error=error
-    )
-    db.add(log)
-    
-    # Update lead
-    lead.last_contact_at = datetime.utcnow()
-    
-    await db.commit()
-    await db.refresh(log)
-    
-    return log
-
-# ==================== DASHBOARD ROUTES ====================
-
-@app.get("/api/dashboard", response_model=DashboardStats)
-async def get_dashboard(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(select(Business).where(Business.user_id == current_user.id))
-    business = result.scalar_one_or_none()
-    
-    if not business:
-        return DashboardStats(
-            todays_followups=0,
-            hot_leads=0,
-            pipeline_counts={status.value: 0 for status in LeadStatus},
-            money_at_risk=0
-        )
-    
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = today_start + timedelta(days=1)
-    
-    # Today's follow-ups
-    result = await db.execute(
-        select(func.count(Lead.id))
-        .where(
-            and_(
-                Lead.business_id == business.id,
-                Lead.next_followup_at >= today_start,
-                Lead.next_followup_at < today_end
-            )
-        )
-    )
-    todays_followups = result.scalar() or 0
-    
-    # Hot leads (no reply after 7 days)
-    seven_days_ago = datetime.utcnow() - timedelta(days=7)
-    result = await db.execute(
-        select(func.count(Lead.id))
-        .where(
-            and_(
-                Lead.business_id == business.id,
-                Lead.status == LeadStatus.FOLLOWING_UP,
-                Lead.last_contact_at <= seven_days_ago
-            )
-        )
-    )
-    hot_leads = result.scalar() or 0
-    
-    # Pipeline counts
-    pipeline_counts = {}
-    for status in LeadStatus:
-        result = await db.execute(
-            select(func.count(Lead.id))
-            .where(and_(Lead.business_id == business.id, Lead.status == status))
-        )
-        pipeline_counts[status.value] = result.scalar() or 0
-    
-    # Money at risk
-    result = await db.execute(
-        select(func.sum(Lead.quote_amount))
-        .where(
-            and_(
-                Lead.business_id == business.id,
-                Lead.status.in_([LeadStatus.NEW, LeadStatus.FOLLOWING_UP]),
-                Lead.quote_amount.isnot(None)
-            )
-        )
-    )
-    money_at_risk = result.scalar() or 0
-    
-    return DashboardStats(
-        todays_followups=todays_followups,
-        hot_leads=hot_leads,
-        pipeline_counts=pipeline_counts,
-        money_at_risk=float(money_at_risk)
-    )
-
-# ==================== AI REWRITE ROUTES ====================
-
-@app.post("/api/ai/rewrite", response_model=AIRewriteResponse)
-async def ai_rewrite(
-    request: AIRewriteRequest,
-    current_user: User = Depends(get_current_user)
-):
-    rewritten = await rewrite_message(request.message, request.tone, request.length)
-    return AIRewriteResponse(original=request.message, rewritten=rewritten)
-
-# ==================== SUBSCRIPTION/STRIPE ROUTES ====================
-
-@app.get("/api/subscription", response_model=SubscriptionResponse)
-async def get_subscription(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(select(Subscription).where(Subscription.user_id == current_user.id))
-    subscription = result.scalar_one_or_none()
-    
-    if not subscription:
-        # Create default subscription
-        subscription = Subscription(user_id=current_user.id, status=SubscriptionStatus.INACTIVE)
-        db.add(subscription)
-        await db.commit()
-        await db.refresh(subscription)
-    
-    return subscription
-
-@app.post("/api/subscription/checkout", response_model=CheckoutSessionResponse)
-async def create_checkout(
-    plan: str = Query(..., description="Plan: SOLO, GROWTH, or TEAM"),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    if plan not in PLAN_CONFIG:
-        raise HTTPException(status_code=400, detail="Invalid plan")
-    
-    base_url = os.getenv("APP_BASE_URL", "https://followuppro.com")
-    success_url = f"{base_url}/subscription/success?session_id={{CHECKOUT_SESSION_ID}}"
-    cancel_url = f"{base_url}/subscription/cancel"
-    
-    checkout_url, error = await create_checkout_session(
-        current_user.email,
-        plan,
-        success_url,
-        cancel_url
-    )
-    
-    if error:
-        raise HTTPException(status_code=500, detail=error)
-    
-    return CheckoutSessionResponse(checkout_url=checkout_url)
-
-@app.post("/api/subscription/portal", response_model=CustomerPortalResponse)
-async def create_portal(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(select(Subscription).where(Subscription.user_id == current_user.id))
-    subscription = result.scalar_one_or_none()
-    
-    if not subscription or not subscription.stripe_customer_id:
-        raise HTTPException(status_code=400, detail="No active subscription found")
-    
-    base_url = os.getenv("APP_BASE_URL", "https://followuppro.com")
-    portal_url, error = await create_customer_portal_session(
-        subscription.stripe_customer_id,
-        f"{base_url}/settings"
-    )
-    
-    if error:
-        raise HTTPException(status_code=500, detail=error)
-    
-    return CustomerPortalResponse(portal_url=portal_url)
-
-# ==================== TWILIO WEBHOOK ====================
-
-@app.post("/api/webhooks/twilio/sms")
-async def twilio_sms_webhook(
-    request: Request,
-    db: AsyncSession = Depends(get_db)
-):
-    """Handle incoming SMS from Twilio"""
-    form_data = await request.form()
-    
-    from_number = form_data.get("From", "")
-    body = form_data.get("Body", "")
-    message_sid = form_data.get("MessageSid", "")
-    
-    if not from_number or not body:
-        return {"status": "ignored"}
-    
-    # Normalize the phone number
-    normalized_phone = normalize_phone(from_number)
-    # Get just the digits for matching (last 10)
-    search_digits = ''.join(filter(str.isdigit, normalized_phone))[-10:]
-    
-    # Find lead by phone number - we need to search more flexibly
-    # Since phone numbers may be stored with various formats
-    result = await db.execute(select(Lead).options(selectinload(Lead.business).selectinload(Business.user)))
-    all_leads = result.scalars().all()
-    
-    # Find matching lead by normalizing both numbers
-    lead = None
-    for l in all_leads:
-        stored_digits = ''.join(filter(str.isdigit, l.phone))[-10:]
-        if stored_digits == search_digits:
-            lead = l
-            break
-    
-    if not lead:
-        print(f"No lead found for phone: {normalized_phone}")
-        return {"status": "no_lead_found"}
-    
-    # Log the inbound message
-    log = MessageLog(
-        lead_id=lead.id,
-        direction=MessageDirection.INBOUND,
-        channel=Channel.SMS,
-        body=body,
-        status=MessageStatus.SENT,
-        provider_message_id=message_sid
-    )
-    db.add(log)
-    
-    # Stop automation - mark as REPLIED
-    if lead.status == LeadStatus.FOLLOWING_UP:
-        lead.status = LeadStatus.REPLIED
-        lead.next_followup_at = None
-    
-    lead.last_contact_at = datetime.utcnow()
-    
-    await db.commit()
-    
-    # TODO: Send push notification to user
-    # if lead.business and lead.business.user and lead.business.user.expo_push_token:
-    #     await send_push_notification(lead.business.user.expo_push_token, f"{lead.full_name} replied!")
-    
-    return {"status": "ok", "lead_id": lead.id}
-
-# ==================== STRIPE WEBHOOK ====================
-
-@app.post("/api/webhooks/stripe")
-async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
-    """Handle Stripe webhook events"""
-    payload = await request.body()
-    signature = request.headers.get("stripe-signature", "")
-    
-    event, error = verify_webhook_signature(payload, signature)
-    
-    if error:
-        # In development, try to parse the event directly
-        import json
-        try:
-            event = json.loads(payload)
-        except:
-            raise HTTPException(status_code=400, detail=error)
-    
-    if not event:
-        return {"status": "ignored"}
-    
-    event_type = event.get("type") if isinstance(event, dict) else event.type
-    
-    if event_type == "checkout.session.completed":
-        session = event.get("data", {}).get("object", {}) if isinstance(event, dict) else event.data.object
-        customer_email = session.get("customer_email") or session.get("customer_details", {}).get("email")
-        customer_id = session.get("customer")
-        subscription_id = session.get("subscription")
-        plan = session.get("metadata", {}).get("plan", "SOLO")
-        
-        # Find user by email
-        result = await db.execute(select(User).where(User.email == customer_email))
-        user = result.scalar_one_or_none()
-        
-        if user:
-            result = await db.execute(select(Subscription).where(Subscription.user_id == user.id))
-            subscription = result.scalar_one_or_none()
-            
-            if subscription:
-                subscription.stripe_customer_id = customer_id
-                subscription.stripe_subscription_id = subscription_id
-                subscription.status = SubscriptionStatus.ACTIVE
-                subscription.plan = SubscriptionPlan(plan)
-                subscription.active_lead_limit = PLAN_CONFIG.get(plan, {}).get("lead_limit", 50)
-                await db.commit()
-    
-    elif event_type in ["customer.subscription.updated", "customer.subscription.deleted"]:
-        sub_object = event.get("data", {}).get("object", {}) if isinstance(event, dict) else event.data.object
-        subscription_id = sub_object.get("id")
-        status = sub_object.get("status")
-        
-        result = await db.execute(
-            select(Subscription).where(Subscription.stripe_subscription_id == subscription_id)
-        )
-        subscription = result.scalar_one_or_none()
-        
-        if subscription:
-            if status == "active":
-                subscription.status = SubscriptionStatus.ACTIVE
-            elif status == "past_due":
-                subscription.status = SubscriptionStatus.PAST_DUE
-            elif status in ["canceled", "unpaid"]:
-                subscription.status = SubscriptionStatus.CANCELED
-            await db.commit()
-    
-    return {"status": "ok"}
-
-# ==================== DEBUG ENDPOINTS (MOCK_MODE only) ====================
-
-MOCK_MODE = os.getenv("MOCK_MODE", "true").lower() == "true"
-
-@app.post("/api/debug/inbound-sms")
-async def debug_inbound_sms(
-    request: Request,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Simulate an inbound SMS for testing.
-    Request body: {"from_phone": "+15551234567", "body": "Yes!"}
-    """
-    if not MOCK_MODE:
-        raise HTTPException(status_code=403, detail="Debug endpoints only available in MOCK_MODE")
-    
-    data = await request.json()
-    from_phone = data.get("from_phone", "")
-    body = data.get("body", "")
-    
-    if not from_phone or not body:
-        raise HTTPException(status_code=400, detail="from_phone and body are required")
-    
-    # Normalize phone and find lead
-    normalized_phone = normalize_phone(from_phone)
-    search_digits = ''.join(filter(str.isdigit, normalized_phone))[-10:]
-    
-    result = await db.execute(select(Lead).options(selectinload(Lead.business)))
-    all_leads = result.scalars().all()
-    
-    lead = None
-    for l in all_leads:
-        stored_digits = ''.join(filter(str.isdigit, l.phone))[-10:]
-        if stored_digits == search_digits:
-            lead = l
-            break
-    
-    if not lead:
-        raise HTTPException(status_code=404, detail=f"No lead found matching phone {from_phone}")
-    
-    # Log inbound message
-    log = MessageLog(
-        lead_id=lead.id,
-        direction=MessageDirection.INBOUND,
-        channel=Channel.SMS,
-        body=body,
-        status=MessageStatus.SENT,
-        provider_message_id=f"debug_{datetime.utcnow().timestamp()}"
-    )
-    db.add(log)
-    
-    # Stop automation
-    automation_stopped = False
-    if lead.status == LeadStatus.FOLLOWING_UP:
-        lead.status = LeadStatus.REPLIED
-        lead.next_followup_at = None
-        automation_stopped = True
-    
-    lead.last_contact_at = datetime.utcnow()
-    await db.commit()
-    
-    return {
-        "status": "ok",
-        "lead_id": lead.id,
-        "automation_stopped": automation_stopped
-    }
-
-@app.post("/api/debug/trigger-worker")
-async def debug_trigger_worker(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """Manually trigger the follow-up worker."""
-    if not MOCK_MODE:
-        raise HTTPException(status_code=403, detail="Debug endpoints only available in MOCK_MODE")
-    
-    now = datetime.utcnow()
-    
-    result = await db.execute(
-        select(Lead)
-        .options(selectinload(Lead.sequence).selectinload(Sequence.steps))
-        .options(selectinload(Lead.business))
-        .where(
-            and_(
-                Lead.status == LeadStatus.FOLLOWING_UP,
-                Lead.next_followup_at <= now,
-                Lead.current_sequence_id.isnot(None)
-            )
-        )
-    )
-    leads = result.scalars().all()
-    
-    processed = 0
-    for lead in leads:
-        await send_followup(db, lead)
-        processed += 1
-    
-    if leads:
-        await db.commit()
-    
-    return {"status": "ok", "leads_processed": processed}
-
-@app.get("/api/debug/status")
-async def debug_status():
-    """Get mock mode status."""
-    return {"mock_mode": MOCK_MODE, "scheduler_running": scheduler.running}
-
-# ==================== HEALTH CHECK ====================
+# ============= HEALTH CHECK =============
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat(), "mock_mode": MOCK_MODE}
+    return {
+        "status": "healthy",
+        "version": "2.0.0",
+        "mock_mode": MOCK_MODE,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+
+# ============= AUTH ENDPOINTS =============
+
+@app.post("/api/auth/register", response_model=schemas.TokenResponse)
+async def register(
+    user_data: schemas.UserCreate,
+    db: AsyncSession = Depends(get_db)
+):
+    # Check if email exists
+    existing = await crud.get_user_by_email(db, user_data.email)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered"
+        )
+    
+    # Create user
+    hashed_password = get_password_hash(user_data.password)
+    user = await crud.create_user(db, user_data, hashed_password)
+    
+    # Create default data for new user
+    await crud.create_default_lead_sources(db, user.id)
+    await crud.create_default_templates(db, user.id)
+    await crud.create_default_availability(db, user.id)
+    await crud.create_default_follow_up_plan(db, user.id)
+    
+    # Generate token
+    token = create_access_token(data={"sub": str(user.id)})
+    
+    return schemas.TokenResponse(
+        access_token=token,
+        user=schemas.UserResponse.model_validate(user)
+    )
+
+
+@app.post("/api/auth/login", response_model=schemas.TokenResponse)
+async def login(
+    credentials: schemas.UserLogin,
+    db: AsyncSession = Depends(get_db)
+):
+    user = await crud.get_user_by_email(db, credentials.email)
+    if not user or not verify_password(credentials.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password"
+        )
+    
+    token = create_access_token(data={"sub": str(user.id)})
+    
+    return schemas.TokenResponse(
+        access_token=token,
+        user=schemas.UserResponse.model_validate(user)
+    )
+
+
+@app.get("/api/auth/me", response_model=schemas.UserResponse)
+async def get_me(
+    current_user: models.User = Depends(get_current_user)
+):
+    return schemas.UserResponse.model_validate(current_user)
+
+
+@app.patch("/api/auth/me", response_model=schemas.UserResponse)
+async def update_me(
+    user_data: schemas.UserUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    updated = await crud.update_user(db, current_user, user_data)
+    return schemas.UserResponse.model_validate(updated)
+
+
+# ============= DEVICE ENDPOINTS =============
+
+@app.post("/api/devices", response_model=schemas.DeviceResponse)
+async def register_device(
+    device_data: schemas.DeviceRegister,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    device = await crud.register_device(db, current_user.id, device_data)
+    return schemas.DeviceResponse.model_validate(device)
+
+
+@app.get("/api/devices", response_model=List[schemas.DeviceResponse])
+async def list_devices(
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    devices = await crud.get_user_devices(db, current_user.id)
+    return [schemas.DeviceResponse.model_validate(d) for d in devices]
+
+
+@app.delete("/api/devices/{device_id}")
+async def delete_device(
+    device_id: UUID,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    deleted = await crud.delete_device(db, current_user.id, device_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Device not found")
+    return {"success": True}
+
+
+# ============= LEAD SOURCE ENDPOINTS =============
+
+@app.get("/api/lead-sources", response_model=List[schemas.LeadSourceResponse])
+async def list_lead_sources(
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    sources = await crud.get_lead_sources(db, current_user.id)
+    return [schemas.LeadSourceResponse.model_validate(s) for s in sources]
+
+
+@app.post("/api/lead-sources", response_model=schemas.LeadSourceResponse)
+async def create_lead_source(
+    source_data: schemas.LeadSourceCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    source = await crud.create_lead_source(db, current_user.id, source_data)
+    return schemas.LeadSourceResponse.model_validate(source)
+
+
+@app.patch("/api/lead-sources/{source_id}", response_model=schemas.LeadSourceResponse)
+async def update_lead_source(
+    source_id: UUID,
+    source_data: schemas.LeadSourceUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    source = await crud.get_lead_source_by_id(db, current_user.id, source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Lead source not found")
+    updated = await crud.update_lead_source(db, source, source_data)
+    return schemas.LeadSourceResponse.model_validate(updated)
+
+
+@app.delete("/api/lead-sources/{source_id}")
+async def delete_lead_source(
+    source_id: UUID,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    source = await crud.get_lead_source_by_id(db, current_user.id, source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Lead source not found")
+    await crud.delete_lead_source(db, source)
+    return {"success": True}
+
+
+# ============= LEAD ENDPOINTS =============
+
+@app.get("/api/leads", response_model=List[schemas.LeadListResponse])
+async def list_leads(
+    status: Optional[models.LeadStatus] = None,
+    source_id: Optional[UUID] = None,
+    search: Optional[str] = None,
+    limit: int = Query(default=50, le=100),
+    offset: int = Query(default=0, ge=0),
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    leads = await crud.get_leads(db, current_user.id, status, source_id, search, limit, offset)
+    return [schemas.LeadListResponse.model_validate(l) for l in leads]
+
+
+@app.get("/api/leads/{lead_id}", response_model=schemas.LeadResponse)
+async def get_lead(
+    lead_id: UUID,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    lead = await crud.get_lead_by_id(db, current_user.id, lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    return schemas.LeadResponse.model_validate(lead)
+
+
+@app.post("/api/leads", response_model=schemas.LeadResponse)
+async def create_lead(
+    lead_data: schemas.LeadCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    lead = await crud.create_lead(db, current_user.id, lead_data)
+    
+    # Schedule follow-ups if plan is assigned
+    if lead.follow_up_plan_id:
+        await schedule_follow_ups_for_lead(db, lead)
+    
+    # Refresh to get relationships
+    lead = await crud.get_lead_by_id(db, current_user.id, lead.id)
+    return schemas.LeadResponse.model_validate(lead)
+
+
+@app.patch("/api/leads/{lead_id}", response_model=schemas.LeadResponse)
+async def update_lead(
+    lead_id: UUID,
+    lead_data: schemas.LeadUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    lead = await crud.get_lead_by_id(db, current_user.id, lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    
+    # Check if status is changing to BOOKED, WON, or LOST - cancel follow-ups
+    if lead_data.status and lead_data.status in [
+        models.LeadStatus.BOOKED, models.LeadStatus.WON, models.LeadStatus.LOST
+    ]:
+        await crud.cancel_scheduled_sends_for_lead(db, lead_id)
+    
+    updated = await crud.update_lead(db, lead, lead_data)
+    updated = await crud.get_lead_by_id(db, current_user.id, lead_id)
+    return schemas.LeadResponse.model_validate(updated)
+
+
+@app.delete("/api/leads/{lead_id}")
+async def delete_lead(
+    lead_id: UUID,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    lead = await crud.get_lead_by_id(db, current_user.id, lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    await crud.delete_lead(db, lead)
+    return {"success": True}
+
+
+@app.post("/api/leads/{lead_id}/captures", response_model=schemas.LeadCaptureResponse)
+async def add_lead_capture(
+    lead_id: UUID,
+    capture_data: schemas.LeadCaptureCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    lead = await crud.get_lead_by_id(db, current_user.id, lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    capture = await crud.add_lead_capture(db, lead_id, capture_data)
+    return schemas.LeadCaptureResponse.model_validate(capture)
+
+
+# ============= TEMPLATE ENDPOINTS =============
+
+@app.get("/api/templates", response_model=List[schemas.TemplateResponse])
+async def list_templates(
+    category: Optional[models.TemplateCategory] = None,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    templates = await crud.get_templates(db, current_user.id, category)
+    return [schemas.TemplateResponse.model_validate(t) for t in templates]
+
+
+@app.get("/api/templates/{template_id}", response_model=schemas.TemplateResponse)
+async def get_template(
+    template_id: UUID,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    template = await crud.get_template_by_id(db, current_user.id, template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return schemas.TemplateResponse.model_validate(template)
+
+
+@app.post("/api/templates", response_model=schemas.TemplateResponse)
+async def create_template(
+    template_data: schemas.TemplateCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    template = await crud.create_template(db, current_user.id, template_data)
+    return schemas.TemplateResponse.model_validate(template)
+
+
+@app.patch("/api/templates/{template_id}", response_model=schemas.TemplateResponse)
+async def update_template(
+    template_id: UUID,
+    template_data: schemas.TemplateUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    template = await crud.get_template_by_id(db, current_user.id, template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    updated = await crud.update_template(db, template, template_data)
+    return schemas.TemplateResponse.model_validate(updated)
+
+
+@app.delete("/api/templates/{template_id}")
+async def delete_template(
+    template_id: UUID,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    template = await crud.get_template_by_id(db, current_user.id, template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    await crud.delete_template(db, template)
+    return {"success": True}
+
+
+# ============= AVAILABILITY ENDPOINTS =============
+
+@app.get("/api/availability", response_model=List[schemas.AvailabilityRuleResponse])
+async def get_availability(
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    rules = await crud.get_availability_rules(db, current_user.id)
+    return [schemas.AvailabilityRuleResponse.model_validate(r) for r in rules]
+
+
+@app.put("/api/availability", response_model=List[schemas.AvailabilityRuleResponse])
+async def set_availability(
+    rules_data: schemas.AvailabilityBulkUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    rules = await crud.set_availability_rules(db, current_user.id, rules_data)
+    return [schemas.AvailabilityRuleResponse.model_validate(r) for r in rules]
+
+
+# ============= APPOINTMENT ENDPOINTS =============
+
+@app.get("/api/appointments", response_model=List[schemas.AppointmentResponse])
+async def list_appointments(
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    status: Optional[models.AppointmentStatus] = None,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    appts = await crud.get_appointments(db, current_user.id, start_date, end_date, status)
+    return [schemas.AppointmentResponse.model_validate(a) for a in appts]
+
+
+@app.get("/api/appointments/{appt_id}", response_model=schemas.AppointmentResponse)
+async def get_appointment(
+    appt_id: UUID,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    appt = await crud.get_appointment_by_id(db, current_user.id, appt_id)
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    return schemas.AppointmentResponse.model_validate(appt)
+
+
+@app.post("/api/appointments", response_model=schemas.AppointmentResponse)
+async def create_appointment(
+    appt_data: schemas.AppointmentCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    appt = await crud.create_appointment(db, current_user.id, appt_data)
+    
+    # Update lead status if linked
+    if appt_data.lead_id:
+        lead = await crud.get_lead_by_id(db, current_user.id, appt_data.lead_id)
+        if lead and lead.status in [models.LeadStatus.NEW, models.LeadStatus.CONTACTED]:
+            await crud.update_lead(db, lead, schemas.LeadUpdate(status=models.LeadStatus.BOOKED))
+    
+    return schemas.AppointmentResponse.model_validate(appt)
+
+
+@app.patch("/api/appointments/{appt_id}", response_model=schemas.AppointmentResponse)
+async def update_appointment(
+    appt_id: UUID,
+    appt_data: schemas.AppointmentUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    appt = await crud.get_appointment_by_id(db, current_user.id, appt_id)
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    updated = await crud.update_appointment(db, appt, appt_data)
+    return schemas.AppointmentResponse.model_validate(updated)
+
+
+@app.delete("/api/appointments/{appt_id}")
+async def delete_appointment(
+    appt_id: UUID,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    appt = await crud.get_appointment_by_id(db, current_user.id, appt_id)
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    await crud.delete_appointment(db, appt)
+    return {"success": True}
+
+
+@app.get("/api/appointments/{appt_id}/ics")
+async def get_appointment_ics(
+    appt_id: UUID,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    appt = await crud.get_appointment_by_id(db, current_user.id, appt_id)
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    
+    ics_content = generate_ics(
+        summary=f"Appointment with {appt.customer_name}",
+        start=appt.start_at_utc,
+        end=appt.end_at_utc,
+        description=appt.notes or "",
+        organizer_name=current_user.pro_name,
+        organizer_email=current_user.email
+    )
+    
+    return Response(
+        content=ics_content,
+        media_type="text/calendar",
+        headers={"Content-Disposition": f"attachment; filename=appointment_{appt_id}.ics"}
+    )
+
+
+# ============= FOLLOW-UP PLAN ENDPOINTS =============
+
+@app.get("/api/follow-up-plans", response_model=List[schemas.FollowUpPlanResponse])
+async def list_follow_up_plans(
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    plans = await crud.get_follow_up_plans(db, current_user.id)
+    return [schemas.FollowUpPlanResponse.model_validate(p) for p in plans]
+
+
+@app.get("/api/follow-up-plans/{plan_id}", response_model=schemas.FollowUpPlanResponse)
+async def get_follow_up_plan(
+    plan_id: UUID,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    plan = await crud.get_follow_up_plan_by_id(db, current_user.id, plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Follow-up plan not found")
+    return schemas.FollowUpPlanResponse.model_validate(plan)
+
+
+@app.post("/api/follow-up-plans", response_model=schemas.FollowUpPlanResponse)
+async def create_follow_up_plan(
+    plan_data: schemas.FollowUpPlanCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    plan = await crud.create_follow_up_plan(db, current_user.id, plan_data)
+    plan = await crud.get_follow_up_plan_by_id(db, current_user.id, plan.id)
+    return schemas.FollowUpPlanResponse.model_validate(plan)
+
+
+@app.patch("/api/follow-up-plans/{plan_id}", response_model=schemas.FollowUpPlanResponse)
+async def update_follow_up_plan(
+    plan_id: UUID,
+    plan_data: schemas.FollowUpPlanUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    plan = await crud.get_follow_up_plan_by_id(db, current_user.id, plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Follow-up plan not found")
+    updated = await crud.update_follow_up_plan(db, plan, plan_data)
+    return schemas.FollowUpPlanResponse.model_validate(updated)
+
+
+@app.delete("/api/follow-up-plans/{plan_id}")
+async def delete_follow_up_plan(
+    plan_id: UUID,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    plan = await crud.get_follow_up_plan_by_id(db, current_user.id, plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Follow-up plan not found")
+    await crud.delete_follow_up_plan(db, plan)
+    return {"success": True}
+
+
+# ============= MESSAGE LOG ENDPOINTS =============
+
+@app.get("/api/messages", response_model=List[schemas.MessageLogResponse])
+async def list_messages(
+    lead_id: Optional[UUID] = None,
+    limit: int = Query(default=50, le=100),
+    offset: int = Query(default=0, ge=0),
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    messages = await crud.get_message_logs(db, current_user.id, lead_id, limit, offset)
+    return [schemas.MessageLogResponse.model_validate(m) for m in messages]
+
+
+# ============= ANALYTICS ENDPOINTS =============
+
+@app.get("/api/analytics/summary", response_model=schemas.AnalyticsSummary)
+async def get_analytics_summary(
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    if not start_date:
+        start_date = datetime.utcnow() - timedelta(days=30)
+    if not end_date:
+        end_date = datetime.utcnow()
+    
+    return await crud.get_analytics_summary(db, current_user.id, start_date, end_date)
+
+
+@app.get("/api/source-costs", response_model=List[schemas.SourceCostResponse])
+async def list_source_costs(
+    lead_source_id: Optional[UUID] = None,
+    month: Optional[str] = None,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    costs = await crud.get_source_costs(db, current_user.id, lead_source_id, month)
+    return [schemas.SourceCostResponse.model_validate(c) for c in costs]
+
+
+@app.post("/api/source-costs", response_model=schemas.SourceCostResponse)
+async def upsert_source_cost(
+    cost_data: schemas.SourceCostCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    # Verify source belongs to user
+    source = await crud.get_lead_source_by_id(db, current_user.id, cost_data.lead_source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Lead source not found")
+    cost = await crud.upsert_source_cost(db, current_user.id, cost_data)
+    return schemas.SourceCostResponse.model_validate(cost)
+
+
+# ============= PUBLIC BOOKING ENDPOINTS =============
+
+@app.get("/api/book/{public_id}/slots", response_model=schemas.BookingSlotsResponse)
+async def get_booking_slots(
+    public_id: str,
+    date: Optional[datetime] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    user = await crud.get_user_by_public_booking_id(db, public_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Booking page not found")
+    
+    # Get availability rules
+    rules = await crud.get_availability_rules(db, user.id)
+    if not rules:
+        return schemas.BookingSlotsResponse(
+            pro_name=user.pro_name,
+            business_name=user.business_name,
+            duration_minutes=user.default_appt_duration_minutes,
+            slots=[]
+        )
+    
+    # Calculate slots for the next 7 days
+    if not date:
+        date = datetime.utcnow()
+    
+    # Get existing appointments
+    end_date = date + timedelta(days=7)
+    existing_appts = await crud.get_appointments(
+        db, user.id, date, end_date, models.AppointmentStatus.SCHEDULED
+    )
+    
+    slots = calculate_available_slots(
+        rules=rules,
+        existing_appts=existing_appts,
+        duration_minutes=user.default_appt_duration_minutes,
+        buffer_minutes=user.buffer_minutes,
+        daily_limit=user.daily_appt_limit,
+        timezone=user.timezone,
+        start_date=date,
+        days=7
+    )
+    
+    return schemas.BookingSlotsResponse(
+        pro_name=user.pro_name,
+        business_name=user.business_name,
+        duration_minutes=user.default_appt_duration_minutes,
+        slots=slots
+    )
+
+
+@app.post("/api/book/{public_id}", response_model=schemas.PublicBookingResponse)
+async def create_public_booking(
+    public_id: str,
+    booking_data: schemas.PublicBookingCreate,
+    db: AsyncSession = Depends(get_db)
+):
+    user = await crud.get_user_by_public_booking_id(db, public_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Booking page not found")
+    
+    # Calculate end time
+    end_at = booking_data.start_at_utc + timedelta(minutes=user.default_appt_duration_minutes)
+    
+    # Create appointment
+    appt_data = schemas.AppointmentCreate(
+        start_at_utc=booking_data.start_at_utc,
+        end_at_utc=end_at,
+        customer_name=booking_data.customer_name,
+        customer_phone=booking_data.customer_phone,
+        customer_email=booking_data.customer_email,
+        notes=booking_data.notes
+    )
+    appt = await crud.create_appointment(db, user.id, appt_data)
+    
+    # Generate ICS URL
+    ics_url = f"{APP_BASE_URL}/api/book/{public_id}/ics/{appt.id}"
+    
+    # Send push notification to pro
+    push_service = PushNotificationService()
+    devices = await crud.get_user_devices(db, user.id)
+    if devices:
+        await push_service.send_notification(
+            tokens=[d.expo_push_token for d in devices],
+            title="New Booking!",
+            body=f"{booking_data.customer_name} booked an appointment",
+            data={"type": "new_booking", "appointment_id": str(appt.id)}
+        )
+    
+    return schemas.PublicBookingResponse(
+        appointment_id=appt.id,
+        start_at_utc=appt.start_at_utc,
+        end_at_utc=appt.end_at_utc,
+        pro_name=user.pro_name,
+        business_name=user.business_name,
+        ics_url=ics_url
+    )
+
+
+@app.get("/api/book/{public_id}/ics/{appt_id}")
+async def get_public_booking_ics(
+    public_id: str,
+    appt_id: UUID,
+    db: AsyncSession = Depends(get_db)
+):
+    user = await crud.get_user_by_public_booking_id(db, public_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Booking page not found")
+    
+    appt = await crud.get_appointment_by_id(db, user.id, appt_id)
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    
+    ics_content = generate_ics(
+        summary=f"Appointment with {user.business_name or user.pro_name}",
+        start=appt.start_at_utc,
+        end=appt.end_at_utc,
+        description=appt.notes or "",
+        organizer_name=user.pro_name,
+        organizer_email=user.email
+    )
+    
+    return Response(
+        content=ics_content,
+        media_type="text/calendar",
+        headers={"Content-Disposition": f"attachment; filename=appointment.ics"}
+    )
+
+
+# ============= DEBUG ENDPOINTS =============
+
+@app.post("/api/debug/send-push", response_model=schemas.DebugPushResponse)
+async def debug_send_push(
+    push_data: schemas.DebugPushRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    devices = await crud.get_user_devices(db, current_user.id)
+    if not devices:
+        return schemas.DebugPushResponse(
+            success=False,
+            message="No registered devices found",
+            tokens_targeted=0,
+            mock_mode=MOCK_MODE
+        )
+    
+    push_service = PushNotificationService()
+    result = await push_service.send_notification(
+        tokens=[d.expo_push_token for d in devices],
+        title=push_data.title,
+        body=push_data.body,
+        data=push_data.data
+    )
+    
+    return schemas.DebugPushResponse(
+        success=result["success"],
+        message=result.get("message", "Notifications sent"),
+        tokens_targeted=len(devices),
+        mock_mode=MOCK_MODE
+    )
+
+
+@app.post("/api/debug/trigger-worker", response_model=schemas.DebugWorkerResponse)
+async def debug_trigger_worker(
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Manually trigger the background worker to process pending follow-ups and reminders"""
+    from services.worker import process_scheduled_sends
+    
+    result = await process_scheduled_sends(db)
+    
+    return schemas.DebugWorkerResponse(
+        success=True,
+        message="Worker executed",
+        follow_ups_processed=result.get("follow_ups", 0),
+        reminders_processed=result.get("reminders", 0),
+        mock_mode=MOCK_MODE
+    )
+
+
+@app.post("/api/debug/inbound-message")
+async def debug_inbound_message(
+    message_data: schemas.DebugInboundMessage,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Simulate receiving an inbound message from a lead"""
+    lead = await crud.get_lead_by_id(db, current_user.id, message_data.lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    
+    # Log the inbound message
+    from_address = lead.customer_phone if message_data.channel == models.MessageChannel.SMS else lead.customer_email
+    await crud.create_message_log(
+        db=db,
+        user_id=current_user.id,
+        lead_id=lead.id,
+        channel=message_data.channel,
+        to_address=current_user.phone or current_user.email,
+        from_address=from_address,
+        body=message_data.body,
+        direction="inbound",
+        status=models.MessageStatus.MOCKED if MOCK_MODE else models.MessageStatus.DELIVERED
+    )
+    
+    # Cancel pending follow-ups since lead responded
+    cancelled = await crud.cancel_scheduled_sends_for_lead(db, lead.id)
+    
+    # Update lead status to CONTACTED if NEW
+    if lead.status == models.LeadStatus.NEW:
+        await crud.update_lead(db, lead, schemas.LeadUpdate(status=models.LeadStatus.CONTACTED))
+    
+    return {
+        "success": True,
+        "message": "Inbound message recorded",
+        "follow_ups_cancelled": cancelled,
+        "mock_mode": MOCK_MODE
+    }
+
+
+# ============= HELPER FUNCTIONS =============
+
+def calculate_available_slots(
+    rules: List[models.AvailabilityRule],
+    existing_appts: List[models.Appointment],
+    duration_minutes: int,
+    buffer_minutes: int,
+    daily_limit: int,
+    timezone: str,
+    start_date: datetime,
+    days: int = 7
+) -> List[schemas.BookingSlot]:
+    """Calculate available booking slots based on availability rules and existing appointments"""
+    from datetime import time
+    import pytz
+    
+    slots = []
+    tz = pytz.timezone(timezone)
+    
+    # Group rules by weekday
+    rules_by_day = {}
+    for rule in rules:
+        if rule.enabled:
+            if rule.weekday not in rules_by_day:
+                rules_by_day[rule.weekday] = []
+            rules_by_day[rule.weekday].append(rule)
+    
+    # Group existing appointments by date
+    appts_by_date = {}
+    for appt in existing_appts:
+        date_key = appt.start_at_utc.date()
+        if date_key not in appts_by_date:
+            appts_by_date[date_key] = []
+        appts_by_date[date_key].append(appt)
+    
+    # Generate slots for each day
+    current_date = start_date.date()
+    for _ in range(days):
+        weekday = current_date.weekday()
+        
+        if weekday in rules_by_day:
+            day_appts = appts_by_date.get(current_date, [])
+            
+            # Check daily limit
+            if len(day_appts) >= daily_limit:
+                current_date += timedelta(days=1)
+                continue
+            
+            for rule in rules_by_day[weekday]:
+                # Generate slots for this rule
+                slot_start = datetime.combine(current_date, rule.start_time_local)
+                slot_start = tz.localize(slot_start).astimezone(pytz.UTC).replace(tzinfo=None)
+                
+                slot_end_boundary = datetime.combine(current_date, rule.end_time_local)
+                slot_end_boundary = tz.localize(slot_end_boundary).astimezone(pytz.UTC).replace(tzinfo=None)
+                
+                while slot_start + timedelta(minutes=duration_minutes) <= slot_end_boundary:
+                    slot_end = slot_start + timedelta(minutes=duration_minutes)
+                    
+                    # Check for conflicts with existing appointments
+                    has_conflict = False
+                    for appt in day_appts:
+                        appt_start = appt.start_at_utc - timedelta(minutes=buffer_minutes)
+                        appt_end = appt.end_at_utc + timedelta(minutes=buffer_minutes)
+                        
+                        if not (slot_end <= appt_start or slot_start >= appt_end):
+                            has_conflict = True
+                            break
+                    
+                    # Only add future slots
+                    if not has_conflict and slot_start > datetime.utcnow():
+                        slots.append(schemas.BookingSlot(
+                            start_at_utc=slot_start,
+                            end_at_utc=slot_end
+                        ))
+                    
+                    slot_start += timedelta(minutes=duration_minutes + buffer_minutes)
+        
+        current_date += timedelta(days=1)
+    
+    return slots
+
+
+async def schedule_follow_ups_for_lead(db: AsyncSession, lead: models.Lead):
+    """Schedule follow-up messages for a new lead"""
+    if not lead.follow_up_plan_id:
+        return
+    
+    plan = await crud.get_follow_up_plan_by_id(db, lead.user_id, lead.follow_up_plan_id)
+    if not plan or not plan.enabled or not plan.steps:
+        return
+    
+    # Schedule each step
+    cumulative_delay = 0
+    for step in plan.steps:
+        cumulative_delay += step.delay_minutes_from_previous
+        due_at = datetime.utcnow() + timedelta(minutes=cumulative_delay)
+        
+        unique_key = f"followup_{lead.id}_{step.id}"
+        await crud.create_scheduled_send(
+            db=db,
+            user_id=lead.user_id,
+            lead_id=lead.id,
+            entity_type=models.ScheduledEntityType.FOLLOW_UP,
+            due_at_utc=due_at,
+            follow_up_step_id=step.id,
+            unique_key=unique_key
+        )
+
 
 if __name__ == "__main__":
     import uvicorn
