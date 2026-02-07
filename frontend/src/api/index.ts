@@ -2,15 +2,15 @@ import axios from 'axios';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
-// Backend URL - uses relative path for web, env var for native
+// Backend URL - use the EXPO_PUBLIC_BACKEND_URL from env
 const getBaseUrl = () => {
-  if (Platform.OS === 'web') {
-    return '/api';
+  // Use environment variable if available, otherwise use relative path
+  const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
+  if (backendUrl) {
+    return `${backendUrl}/api`;
   }
-  // For Expo Go, use the env variable or fallback
-  return process.env.EXPO_PUBLIC_BACKEND_URL 
-    ? `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`
-    : '/api';
+  // Fallback to relative path (works with proxy)
+  return '/api';
 };
 
 const api = axios.create({
