@@ -2,11 +2,11 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONTS, SHADOWS, STATUS_COLORS, STATUS_LABELS } from '../constants/theme';
-import { Lead } from '../types';
+import { LeadListItem } from '../types';
 import { format } from 'date-fns';
 
 interface LeadCardProps {
-  lead: Lead;
+  lead: LeadListItem;
   onPress: () => void;
 }
 
@@ -17,7 +17,7 @@ export const LeadCard: React.FC<LeadCardProps> = ({ lead, onPress }) => {
     <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.7}>
       <View style={styles.header}>
         <View style={styles.nameContainer}>
-          <Text style={styles.name} numberOfLines={1}>{lead.full_name}</Text>
+          <Text style={styles.name} numberOfLines={1}>{lead.customer_name}</Text>
           <View style={[styles.statusBadge, { backgroundColor: statusColor + '20' }]}>
             <Text style={[styles.statusText, { color: statusColor }]}>
               {STATUS_LABELS[lead.status]}
@@ -28,31 +28,27 @@ export const LeadCard: React.FC<LeadCardProps> = ({ lead, onPress }) => {
       </View>
       
       <View style={styles.details}>
-        <View style={styles.detailRow}>
-          <Ionicons name="briefcase-outline" size={16} color={COLORS.textSecondary} />
-          <Text style={styles.detailText}>{lead.job_type}</Text>
-        </View>
-        
-        <View style={styles.detailRow}>
-          <Ionicons name="call-outline" size={16} color={COLORS.textSecondary} />
-          <Text style={styles.detailText}>{lead.phone}</Text>
-        </View>
-        
-        {lead.quote_amount && (
+        {lead.lead_source && (
           <View style={styles.detailRow}>
-            <Ionicons name="cash-outline" size={16} color={COLORS.secondary} />
-            <Text style={[styles.detailText, { color: COLORS.secondary, fontWeight: '600' }]}>
-              ${lead.quote_amount.toLocaleString()}
-            </Text>
+            <View style={[styles.sourceDot, { backgroundColor: lead.lead_source.color }]} />
+            <Text style={styles.detailText}>{lead.lead_source.name}</Text>
+          </View>
+        )}
+        
+        {lead.customer_phone && (
+          <View style={styles.detailRow}>
+            <Ionicons name="call-outline" size={16} color={COLORS.textSecondary} />
+            <Text style={styles.detailText}>{lead.customer_phone}</Text>
           </View>
         )}
       </View>
       
-      {lead.next_followup_at && (
+      {lead.next_action && (
         <View style={styles.footer}>
-          <Ionicons name="time-outline" size={14} color={COLORS.warning} />
-          <Text style={styles.footerText}>
-            Next follow-up: {format(new Date(lead.next_followup_at), 'MMM d, h:mm a')}
+          <Ionicons name="flag-outline" size={14} color={COLORS.warning} />
+          <Text style={styles.footerText} numberOfLines={1}>
+            {lead.next_action}
+            {lead.next_action_at && ` · ${format(new Date(lead.next_action_at), 'MMM d')}`}
           </Text>
         </View>
       )}
@@ -107,6 +103,11 @@ const styles = StyleSheet.create({
     fontSize: FONTS.sizes.sm,
     color: COLORS.textSecondary,
   },
+  sourceDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -120,5 +121,6 @@ const styles = StyleSheet.create({
     fontSize: FONTS.sizes.xs,
     color: COLORS.warning,
     fontWeight: '500',
+    flex: 1,
   },
 });
