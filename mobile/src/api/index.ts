@@ -4,7 +4,7 @@ import { Platform } from 'react-native';
 
 // Backend URL - use the external preview URL for all platforms
 // This allows both web and Expo Go to reach the backend
-const API_URL = 'https://followboost-33.preview.emergentagent.com';
+const API_URL = 'https://profollow.preview.emergentagent.com';
 
 const api = axios.create({
   baseURL: `${API_URL}/api`,

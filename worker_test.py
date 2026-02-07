@@ -313,7 +313,7 @@ class FollowUpWorkerTester:
 
 def main():
     """Main test runner"""
-    backend_url = "https://followboost-33.preview.emergentagent.com"
+    backend_url = "https://profollow.preview.emergentagent.com"
     
     print(f"Testing FollowUp Pro Background Worker at: {backend_url}")
     

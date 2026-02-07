@@ -155,7 +155,7 @@ class WebhookDebugger:
 
 
 def main():
-    backend_url = "https://followboost-33.preview.emergentagent.com"
+    backend_url = "https://profollow.preview.emergentagent.com"
     debugger = WebhookDebugger(backend_url)
     debugger.setup_and_test_webhook()
 

@@ -317,7 +317,7 @@ index 0000000..b250404
 +
 +
 +def main():
-+    backend_url = "https://followboost-33.preview.emergentagent.com"
++    backend_url = "https://profollow.preview.emergentagent.com"
 +    debugger = WebhookDebugger(backend_url)
 +    debugger.setup_and_test_webhook()
 +
@@ -646,7 +646,7 @@ index 0000000..ceb5e32
 +
 +def main():
 +    """Main test runner"""
-+    backend_url = "https://followboost-33.preview.emergentagent.com"
++    backend_url = "https://profollow.preview.emergentagent.com"
 +    
 +    print(f"Testing FollowUp Pro Background Worker at: {backend_url}")
 +    

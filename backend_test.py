@@ -430,7 +430,7 @@ def main():
     """Main test runner"""
     # Get backend URL from environment or use default
     import os
-    backend_url = "https://followboost-33.preview.emergentagent.com"
+    backend_url = "https://profollow.preview.emergentagent.com"
     
     print(f"Testing FollowUp Pro Backend at: {backend_url}")
     
