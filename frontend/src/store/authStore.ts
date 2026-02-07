@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
-import { authAPI, businessAPI } from '../api';
+import { authAPI } from '../api';
 
 // Token storage helpers that work on both web and native
 const tokenStorage = {
@@ -39,45 +39,47 @@ const tokenStorage = {
   },
 };
 
+// User type matching v2 API
 interface User {
-  id: number;
+  id: string;
   email: string;
-  created_at: string;
-  has_business: boolean;
-  subscription_status?: string;
-  subscription_plan?: string;
-}
-
-interface Business {
-  id: number;
-  business_name: string;
-  owner_name: string;
+  pro_name: string;
+  business_name: string | null;
+  phone: string | null;
   timezone: string;
-  phone?: string;
-  email?: string;
+  public_booking_id: string;
+  default_appt_duration_minutes: number;
+  buffer_minutes: number;
+  daily_appt_limit: number;
+  subscription_status: string;
+  created_at: string;
 }
 
 interface AuthState {
   user: User | null;
-  business: Business | null;
   token: string | null;
   isLoading: boolean;
   isAuthenticated: boolean;
   
   setToken: (token: string | null) => Promise<void>;
   setUser: (user: User | null) => void;
-  setBusiness: (business: Business | null) => void;
   login: (email: string, password: string) => Promise<void>;
-  signup: (email: string, password: string) => Promise<void>;
+  register: (data: {
+    email: string;
+    password: string;
+    pro_name: string;
+    business_name?: string;
+    phone?: string;
+    timezone?: string;
+  }) => Promise<void>;
   logout: () => Promise<void>;
   loadUser: () => Promise<void>;
-  loadBusiness: () => Promise<void>;
+  updateProfile: (data: Partial<User>) => Promise<void>;
   initialize: () => Promise<void>;
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
-  business: null,
   token: null,
   isLoading: true,
   isAuthenticated: false,
@@ -92,46 +94,43 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   setUser: (user) => set({ user }),
-  setBusiness: (business) => set({ business }),
 
   login: async (email, password) => {
     const response = await authAPI.login(email, password);
-    const { access_token } = response.data;
+    const { access_token, user } = response.data;
     await get().setToken(access_token);
-    await get().loadUser();
+    set({ user });
   },
 
-  signup: async (email, password) => {
-    const response = await authAPI.signup(email, password);
-    const { access_token } = response.data;
+  register: async (data) => {
+    const response = await authAPI.register(data);
+    const { access_token, user } = response.data;
     await get().setToken(access_token);
-    await get().loadUser();
+    set({ user });
   },
 
   logout: async () => {
     await get().setToken(null);
-    set({ user: null, business: null, isAuthenticated: false });
+    set({ user: null, isAuthenticated: false });
   },
 
   loadUser: async () => {
     try {
       const response = await authAPI.me();
       set({ user: response.data });
-      if (response.data.has_business) {
-        await get().loadBusiness();
-      }
     } catch (error) {
       console.log('Error loading user:', error);
       await get().logout();
     }
   },
 
-  loadBusiness: async () => {
+  updateProfile: async (data) => {
     try {
-      const response = await businessAPI.get();
-      set({ business: response.data });
+      const response = await authAPI.updateProfile(data);
+      set({ user: response.data });
     } catch (error) {
-      console.log('No business profile yet');
+      console.log('Error updating profile:', error);
+      throw error;
     }
   },
 
