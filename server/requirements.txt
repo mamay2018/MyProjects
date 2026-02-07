@@ -13,5 +13,7 @@ apscheduler>=3.11.0
 twilio>=9.4.0
 sendgrid>=6.11.0
 stripe>=11.4.0
-emergentintegrations
 python-multipart>=0.0.18
+icalendar>=6.0.0
+pytz>=2024.1
+exponent-server-sdk>=2.1.0
