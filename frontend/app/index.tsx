@@ -11,11 +11,8 @@ export default function Index() {
   useEffect(() => {
     if (!isLoading) {
       if (isAuthenticated && user) {
-        if (user.has_business) {
-          router.replace('/(tabs)');
-        } else {
-          router.replace('/onboarding');
-        }
+        // v2: User always has profile info from registration, go directly to tabs
+        router.replace('/(tabs)');
       } else {
         router.replace('/(auth)/login');
       }
