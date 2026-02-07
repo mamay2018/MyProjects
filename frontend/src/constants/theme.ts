@@ -15,13 +15,12 @@ export const COLORS = {
   success: '#10B981',
   info: '#3B82F6',
   
-  // Status colors
+  // v2 Status colors
   statusNew: '#3B82F6',
-  statusFollowingUp: '#F59E0B',
-  statusReplied: '#10B981',
+  statusContacted: '#F59E0B',
+  statusBooked: '#8B5CF6',
   statusWon: '#22C55E',
   statusLost: '#EF4444',
-  statusGhosted: '#6B7280',
 };
 
 export const SPACING = {
@@ -71,26 +70,36 @@ export const SHADOWS = {
   },
 };
 
+// v2 Status system
 export const STATUS_COLORS: Record<string, string> = {
   NEW: COLORS.statusNew,
-  FOLLOWING_UP: COLORS.statusFollowingUp,
-  REPLIED: COLORS.statusReplied,
+  CONTACTED: COLORS.statusContacted,
+  BOOKED: COLORS.statusBooked,
   WON: COLORS.statusWon,
   LOST: COLORS.statusLost,
-  GHOSTED: COLORS.statusGhosted,
 };
 
 export const STATUS_LABELS: Record<string, string> = {
   NEW: 'New',
-  FOLLOWING_UP: 'Following Up',
-  REPLIED: 'Replied',
+  CONTACTED: 'Contacted',
+  BOOKED: 'Booked',
   WON: 'Won',
   LOST: 'Lost',
-  GHOSTED: 'Ghosted',
 };
+
+export const STATUS_ORDER = ['NEW', 'CONTACTED', 'BOOKED', 'WON', 'LOST'];
 
 export const CHANNEL_LABELS: Record<string, string> = {
   SMS: 'SMS',
   EMAIL: 'Email',
-  BOTH: 'Both',
+};
+
+export const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+export const formatCurrency = (cents: number): string => {
+  return `$${(cents / 100).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+};
+
+export const formatPercent = (value: number): string => {
+  return `${value.toFixed(1)}%`;
 };
