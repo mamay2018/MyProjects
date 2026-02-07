@@ -19,16 +19,18 @@ import { COLORS, SPACING, FONTS } from '../../src/constants/theme';
 
 export default function SignupScreen() {
   const router = useRouter();
-  const signup = useAuthStore((state) => state.signup);
+  const register = useAuthStore((state) => state.register);
   
+  const [proName, setProName] = useState('');
+  const [businessName, setBusinessName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleSignup = async () => {
-    if (!email || !password || !confirmPassword) {
-      Alert.alert('Error', 'Please fill in all fields');
+    if (!proName || !email || !password || !confirmPassword) {
+      Alert.alert('Error', 'Please fill in all required fields');
       return;
     }
 
@@ -44,7 +46,12 @@ export default function SignupScreen() {
 
     setLoading(true);
     try {
-      await signup(email, password);
+      await register({
+        email,
+        password,
+        pro_name: proName,
+        business_name: businessName || undefined,
+      });
       router.replace('/');
     } catch (error: any) {
       Alert.alert('Signup Failed', error.response?.data?.detail || 'Could not create account');
@@ -73,7 +80,23 @@ export default function SignupScreen() {
 
           <View style={styles.form}>
             <Input
-              label="Email"
+              label="Your Name *"
+              placeholder="John Smith"
+              value={proName}
+              onChangeText={setProName}
+              autoCapitalize="words"
+            />
+
+            <Input
+              label="Business Name (optional)"
+              placeholder="Smith Plumbing"
+              value={businessName}
+              onChangeText={setBusinessName}
+              autoCapitalize="words"
+            />
+
+            <Input
+              label="Email *"
               placeholder="Enter your email"
               value={email}
               onChangeText={setEmail}
@@ -83,7 +106,7 @@ export default function SignupScreen() {
             />
 
             <Input
-              label="Password"
+              label="Password *"
               placeholder="Create a password"
               value={password}
               onChangeText={setPassword}
@@ -92,7 +115,7 @@ export default function SignupScreen() {
             />
 
             <Input
-              label="Confirm Password"
+              label="Confirm Password *"
               placeholder="Confirm your password"
               value={confirmPassword}
               onChangeText={setConfirmPassword}
