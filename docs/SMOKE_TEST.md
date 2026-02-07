@@ -1,216 +1,159 @@
-# FollowUp Pro - Smoke Test Checklist
+# Smoke Test Guide - FollowUp Pro v2
 
-This checklist verifies the core MVP flow works end-to-end.
+## Backend API Tests
 
-## Prerequisites
-
-- Server running on `http://localhost:8001`
-- `MOCK_MODE=true` in server `.env`
-- PostgreSQL database running
-
-## Test Steps
-
-### 1. Create Account & Business
-
+### 1. Health Check
 ```bash
-# Signup
-curl -X POST http://localhost:8001/api/auth/signup \
-  -H "Content-Type: application/json" \
-  -d '{"email":"test@example.com","password":"test123"}'
-
-# Save the token
-export TOKEN="<access_token from response>"
-
-# Create business profile
-curl -X POST http://localhost:8001/api/business \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"business_name":"Test Plumbing","owner_name":"John Test"}'
+curl -s http://localhost:8001/api/health | jq
 ```
+**Expected:** `{"status": "healthy", "version": "2.0.0", "mock_mode": true, ...}`
 
-**Expected:** Both return 200 with JSON response.
-
----
-
-### 2. Create Lead
-
+### 2. Registration
 ```bash
-curl -X POST http://localhost:8001/api/leads \
+curl -s -X POST http://localhost:8001/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "test@example.com",
+    "password": "test123",
+    "pro_name": "Test Pro",
+    "business_name": "Test Business"
+  }' | jq
+```
+**Expected:** Returns `access_token` and `user` object
+
+### 3. Login
+```bash
+curl -s -X POST http://localhost:8001/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "demo@followuppro.com", "password": "demo123"}' | jq
+```
+**Expected:** Returns JWT token
+
+### 4. Create Lead
+```bash
+TOKEN="<your-jwt-token>"
+
+curl -s -X POST http://localhost:8001/api/leads \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "full_name": "Jane Customer",
-    "phone": "555-123-4567",
-    "email": "jane@example.com",
-    "job_type": "Water Heater Replacement",
-    "quote_amount": 2500,
-    "preferred_channel": "SMS"
-  }'
+    "customer_name": "Jane Doe",
+    "customer_phone": "+15551234567",
+    "customer_email": "jane@example.com",
+    "notes": "Needs kitchen repair"
+  }' | jq
 ```
+**Expected:** Returns created lead with `id` and `status: NEW`
 
-**Expected:** Returns lead with `status: "NEW"`, `id: 1`
-
----
-
-### 3. Get Available Sequences
-
+### 5. List Leads
 ```bash
-curl http://localhost:8001/api/sequences \
-  -H "Authorization: Bearer $TOKEN"
+curl -s http://localhost:8001/api/leads \
+  -H "Authorization: Bearer $TOKEN" | jq
 ```
+**Expected:** Array of leads with source info
 
-**Expected:** Returns 3 built-in sequences (Friendly, Professional, Urgent)
-
----
-
-### 4. Assign Sequence to Lead
-
+### 6. Update Lead Status
 ```bash
-curl -X POST http://localhost:8001/api/leads/1/assign-sequence \
+LEAD_ID="<lead-uuid>"
+
+curl -s -X PATCH http://localhost:8001/api/leads/$LEAD_ID \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"sequence_id": 1}'
+  -d '{"status": "CONTACTED"}' | jq
 ```
+**Expected:** Lead with `status: CONTACTED` and `contacted_at` timestamp
 
-**Expected:** 
-- Lead status changes to `FOLLOWING_UP`
-- `next_followup_at` is set
-- `current_sequence_id` is set
-
----
-
-### 5. Trigger Worker (or wait 1 minute)
-
+### 7. Analytics Summary
 ```bash
-# Manual trigger
-curl -X POST http://localhost:8001/api/debug/trigger-worker \
-  -H "Authorization: Bearer $TOKEN"
+curl -s http://localhost:8001/api/analytics/summary \
+  -H "Authorization: Bearer $TOKEN" | jq
 ```
+**Expected:** Object with `total_leads`, `by_source` array with metrics
 
-**Expected:** Returns `{"status": "ok", "leads_processed": 1}`
-
----
-
-### 6. Verify Message Was Sent
-
+### 8. Public Booking Slots
 ```bash
-curl http://localhost:8001/api/leads/1/messages \
-  -H "Authorization: Bearer $TOKEN"
-```
+# Get public_booking_id from user profile
+PUBLIC_ID="<8-char-id>"
 
-**Expected:**
-```json
-[
-  {
-    "id": 1,
-    "lead_id": 1,
-    "direction": "OUTBOUND",
+curl -s http://localhost:8001/api/book/$PUBLIC_ID/slots | jq
+```
+**Expected:** `pro_name`, `duration_minutes`, and `slots` array
+
+### 9. Create Public Booking
+```bash
+curl -s -X POST http://localhost:8001/api/book/$PUBLIC_ID \
+  -H "Content-Type: application/json" \
+  -d '{
+    "start_at_utc": "2026-02-10T14:00:00",
+    "customer_name": "Customer Name",
+    "customer_email": "customer@example.com"
+  }' | jq
+```
+**Expected:** Appointment created with `ics_url`
+
+### 10. Debug: Trigger Worker
+```bash
+curl -s -X POST http://localhost:8001/api/debug/trigger-worker \
+  -H "Authorization: Bearer $TOKEN" | jq
+```
+**Expected:** `{"success": true, "follow_ups_processed": 0, ...}`
+
+### 11. Debug: Inbound Message
+```bash
+curl -s -X POST http://localhost:8001/api/debug/inbound-message \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "lead_id": "<lead-uuid>",
     "channel": "SMS",
-    "body": "Hey Jane! Just wanted to follow up...",
-    "status": "SENT",
-    "provider_message_id": "mock_sms_+15551234567"
-  }
-]
-```
-
----
-
-### 7. Simulate Inbound SMS Reply
-
-```bash
-curl -X POST http://localhost:8001/api/debug/inbound-sms \
-  -H "Content-Type: application/json" \
-  -d '{
-    "from_phone": "+15551234567",
     "body": "Yes, I am interested!"
-  }'
+  }' | jq
 ```
+**Expected:** Message logged, lead status updated if NEW
 
-**Expected:** Returns `{"status": "ok", "lead_id": 1, "automation_stopped": true}`
-
----
-
-### 8. Verify Automation Stopped
-
+### 12. Message Logs
 ```bash
-curl http://localhost:8001/api/leads/1 \
-  -H "Authorization: Bearer $TOKEN"
+curl -s http://localhost:8001/api/messages \
+  -H "Authorization: Bearer $TOKEN" | jq
 ```
+**Expected:** Array of message logs with `status: MOCKED`
 
-**Expected:**
-- `status: "REPLIED"`
-- `next_followup_at: null`
+## Frontend Tests
+
+### 1. Web Preview
+- Open browser to app preview URL
+- Should see login screen
+
+### 2. Login Flow
+- Enter `demo@followuppro.com` / `demo123`
+- Should navigate to leads list
+
+### 3. Lead Creation
+- Tap "Add Lead" button
+- Fill form and submit
+- Lead should appear in list
+
+### 4. Lead Detail
+- Tap on a lead
+- Should see full details with status pipeline
+
+## Test Results Checklist
+
+| Test | Status | Notes |
+|------|--------|-------|
+| Health Check | ✅ | |
+| Registration | ✅ | |
+| Login | ✅ | |
+| Create Lead | ✅ | |
+| List Leads | ✅ | |
+| Update Lead | ✅ | |
+| Analytics | ✅ | |
+| Public Booking Slots | ✅ | |
+| Create Booking | ✅ | |
+| Trigger Worker | ✅ | |
+| Inbound Message | ✅ | |
+| Message Logs | ✅ | |
 
 ---
 
-### 9. Verify Message Log Updated
-
-```bash
-curl http://localhost:8001/api/leads/1/messages \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-**Expected:** Now shows 2 messages:
-1. OUTBOUND (sent by worker)
-2. INBOUND (from debug endpoint)
-
----
-
-### 10. Check Dashboard Stats
-
-```bash
-curl http://localhost:8001/api/dashboard \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-**Expected:**
-```json
-{
-  "todays_followups": 0,
-  "hot_leads": 0,
-  "pipeline_counts": {
-    "NEW": 0,
-    "FOLLOWING_UP": 0,
-    "REPLIED": 1,
-    "WON": 0,
-    "LOST": 0,
-    "GHOSTED": 0
-  },
-  "money_at_risk": 0
-}
-```
-
----
-
-## Summary Checklist
-
-- [ ] Create account and login
-- [ ] Create business profile
-- [ ] Create lead with phone/email
-- [ ] Verify 3 built-in sequences exist
-- [ ] Assign sequence to lead
-- [ ] Worker sends first message (within 1 min or manual trigger)
-- [ ] Message appears in lead's message log
-- [ ] Inbound SMS reply stops automation
-- [ ] Lead status changes to REPLIED
-- [ ] Message log shows both OUTBOUND and INBOUND
-- [ ] Dashboard stats update correctly
-
----
-
-## Troubleshooting
-
-**Worker not sending messages?**
-- Check `MOCK_MODE=true` in `.env`
-- Verify lead has `status=FOLLOWING_UP` and `next_followup_at` in the past
-- Check server logs for errors
-
-**Inbound SMS not matching lead?**
-- Phone numbers must match by last 10 digits
-- Stored: `555-123-4567` → digits: `5551234567`
-- Incoming: `+15551234567` → digits: `5551234567`
-- Both match!
-
-**API returning 401?**
-- Token expired (24 hours)
-- Login again to get new token
+**Last Updated:** v2.0.0 - Backend APIs Complete

@@ -1,180 +1,123 @@
-# FollowUp Pro
+# FollowUp Pro v2
 
-A production-ready mobile app that helps service professionals automatically follow up with leads via SMS + Email until the client replies or the lead is marked won/lost.
+**A production-ready MVP mobile app for service professionals to manage leads, automate follow-ups, and enable self-service booking.**
+
+## 🎯 Business Goal
+
+Increase a service pro's close rate by:
+- Automating lead follow-up sequences
+- Enabling customers to self-book appointments
+- Tracking lead source effectiveness and ROI
+
+## 📱 Features
+
+### Core Features
+- **Universal Lead Inbox & Pipeline**: Manage leads from any source with status tracking (NEW → CONTACTED → BOOKED → WON/LOST)
+- **Quick Responses (Templates)**: Pre-built templates for SMS, Email, and platform-specific replies
+- **Auto Booking & Scheduling**: Set availability, generate public booking links, ICS calendar files
+- **Follow-Up Automation**: Automated SMS/Email sequences with configurable delays
+- **Lead Source Analytics**: Track leads, bookings, revenue, and ROI by source
+- **Push Notifications**: Real-time alerts for new bookings and reminders
+
+### MOCK_MODE
+All integrations work in `MOCK_MODE=true` without real API keys:
+- Messages are logged to `MessageLog` table instead of being sent
+- Push notifications are logged to console
+- Debug endpoints allow testing flows manually
+
+## 🛠 Tech Stack
+
+- **Mobile**: React Native (Expo) with TypeScript
+- **Backend**: Python (FastAPI)
+- **Database**: PostgreSQL
+- **Integrations**: Twilio (SMS), SendGrid (Email), Stripe (Payments), Expo Push Notifications
+
+## 🚀 Quick Start
+
+See [docs/SETUP.md](docs/SETUP.md) for detailed setup instructions.
+
+```bash
+# 1. Start PostgreSQL
+sudo service postgresql start
+
+# 2. Start Backend
+cd /app/backend
+sudo supervisorctl restart backend
+
+# 3. Start Mobile (Expo)
+cd /app/frontend
+sudo supervisorctl restart expo
+```
+
+## 🧪 Testing
+
+See [docs/SMOKE_TEST.md](docs/SMOKE_TEST.md) for comprehensive smoke tests.
+
+**Demo Account:**
+- Email: `demo@followuppro.com`
+- Password: `demo123`
+
+## 📊 API Endpoints
+
+### Auth
+- `POST /api/auth/register` - Register new user
+- `POST /api/auth/login` - Login
+- `GET /api/auth/me` - Get current user
+- `PATCH /api/auth/me` - Update profile
+
+### Leads
+- `GET /api/leads` - List leads (with filters)
+- `POST /api/leads` - Create lead
+- `GET /api/leads/{id}` - Get lead details
+- `PATCH /api/leads/{id}` - Update lead
+- `DELETE /api/leads/{id}` - Delete lead
+
+### Lead Sources & Analytics
+- `GET /api/lead-sources` - List sources
+- `POST /api/lead-sources` - Create source
+- `GET /api/analytics/summary` - Get analytics dashboard data
+- `POST /api/source-costs` - Record marketing spend
+
+### Templates & Follow-ups
+- `GET /api/templates` - List templates
+- `POST /api/templates` - Create template
+- `GET /api/follow-up-plans` - List plans
+- `POST /api/follow-up-plans` - Create plan
+
+### Booking
+- `GET /api/availability` - Get availability rules
+- `PUT /api/availability` - Set availability
+- `GET /api/book/{publicId}/slots` - Public: Get available slots
+- `POST /api/book/{publicId}` - Public: Book appointment
+
+### Debug (MOCK_MODE)
+- `POST /api/debug/send-push` - Test push notifications
+- `POST /api/debug/trigger-worker` - Trigger background worker
+- `POST /api/debug/inbound-message` - Simulate incoming message
 
 ## 📁 Project Structure
 
 ```
-followup-pro/
-├── mobile/              # React Native (Expo) mobile app
-│   ├── app/             # Expo Router screens
-│   ├── src/             # Components, store, API, types
-│   ├── package.json
-│   └── .env.example
-├── server/              # FastAPI backend + worker
-│   ├── server.py        # Main API server with scheduler
-│   ├── database.py      # PostgreSQL connection
-│   ├── models.py        # SQLAlchemy models
-│   ├── schemas.py       # Pydantic schemas
-│   ├── auth.py          # JWT authentication
-│   ├── services/        # Messaging, AI, Stripe services
-│   ├── requirements.txt
-│   └── .env.example
-├── docs/                # Documentation
-│   ├── SETUP.md         # Full setup guide
-│   ├── WEBHOOKS.md      # Webhook configuration
-│   └── SMOKE_TEST.md    # End-to-end test checklist
-└── docker-compose.yml   # PostgreSQL setup
+/app
+├── backend/              # FastAPI backend
+│   ├── server.py         # Main API server
+│   ├── models.py         # SQLAlchemy models
+│   ├── schemas.py        # Pydantic schemas
+│   ├── crud.py           # Database operations
+│   ├── auth.py           # JWT authentication
+│   └── services/         # Business logic
+│       ├── messaging.py  # SMS/Email via Twilio/SendGrid
+│       ├── push_notifications.py  # Expo Push
+│       ├── ics_generator.py       # Calendar files
+│       └── worker.py     # Background job processor
+├── frontend/             # Expo mobile app
+│   ├── app/              # Expo Router screens
+│   └── src/              # Components, stores, API
+└── docs/                 # Documentation
+    ├── SETUP.md
+    └── SMOKE_TEST.md
 ```
 
-## 🚀 Quick Start
-
-### 1. Start PostgreSQL
-
-```bash
-docker-compose up -d
-```
-
-### 2. Start the Server
-
-```bash
-cd server
-cp .env.example .env
-# Edit .env with your settings (MOCK_MODE=true by default)
-
-pip install -r requirements.txt
-python server.py
-```
-
-The server will:
-- Create database tables
-- Seed 3 built-in sequences (Friendly, Professional, Urgent)
-- Start the follow-up scheduler (runs every 1 minute)
-
-### 3. Start the Mobile App
-
-```bash
-cd mobile
-cp .env.example .env
-# Edit .env with your backend URL
-
-yarn install
-yarn start
-```
-
-## ⚙️ Follow-up Scheduler
-
-The scheduler is an **APScheduler interval job** running inside the server process:
-
-```python
-scheduler.add_job(process_followups, 'interval', minutes=1, id='followup_worker')
-```
-
-**What it does every minute:**
-1. Finds leads with `status=FOLLOWING_UP` and `next_followup_at <= now`
-2. Sends the message via Twilio/SendGrid (or logs if `MOCK_MODE=true`)
-3. Advances to next sequence step
-4. Marks lead as `GHOSTED` when sequence completes
-5. Logs all activity to `message_logs` table
-
-**To start manually:**
-```bash
-cd server
-python server.py
-# Scheduler starts automatically
-```
-
-**To trigger worker immediately (MOCK_MODE only):**
-```bash
-curl -X POST http://localhost:8001/api/debug/trigger-worker \
-  -H "Authorization: Bearer YOUR_TOKEN"
-```
-
-## 📱 Twilio Webhook
-
-**Endpoint:** `POST /api/webhooks/twilio/sms`
-
-**Expected payload (form-urlencoded):**
-```
-From=%2B15551234567
-Body=Yes%20I%20am%20interested
-MessageSid=SM123
-```
-
-**Phone matching:** Compares last 10 digits of incoming phone to stored leads:
-```python
-# Stored: 555-123-4567 → 5551234567
-# Incoming: +15551234567 → 5551234567
-# Match! ✓
-```
-
-**What happens:**
-1. Inbound message logged with `direction=INBOUND`
-2. Lead status changes to `REPLIED`
-3. Automation stops (`next_followup_at=null`)
-
-## 🧪 Debug Endpoints (MOCK_MODE only)
-
-When `MOCK_MODE=true` in server `.env`:
-
-| Endpoint | Description |
-|----------|-------------|
-| `POST /api/debug/inbound-sms` | Simulate inbound SMS |
-| `POST /api/debug/trigger-worker` | Manually run follow-up worker |
-| `GET /api/debug/status` | Check mock mode status |
-
-**Simulate inbound SMS:**
-```bash
-curl -X POST http://localhost:8001/api/debug/inbound-sms \
-  -H "Content-Type: application/json" \
-  -d '{"from_phone": "+15551234567", "body": "Yes!"}'
-```
-
-## 📋 Environment Variables
-
-### Server (.env)
-
-| Variable | Description |
-|----------|-------------|
-| `DATABASE_URL` | PostgreSQL connection string |
-| `JWT_SECRET` | Secret key for JWT tokens |
-| `TWILIO_ACCOUNT_SID` | Twilio account SID |
-| `TWILIO_AUTH_TOKEN` | Twilio auth token |
-| `TWILIO_PHONE_NUMBER` | Your Twilio phone number |
-| `SENDGRID_API_KEY` | SendGrid API key |
-| `FROM_EMAIL` | Sender email address |
-| `STRIPE_SECRET_KEY` | Stripe secret key |
-| `STRIPE_WEBHOOK_SECRET` | Stripe webhook secret |
-| `EMERGENT_LLM_KEY` | OpenAI API key (via Emergent) |
-| `MOCK_MODE` | `true` to disable real SMS/Email |
-
-### Mobile (.env)
-
-| Variable | Description |
-|----------|-------------|
-| `EXPO_PUBLIC_BACKEND_URL` | Backend API URL |
-
-## ✅ Smoke Test
-
-Run the full smoke test to verify everything works:
-
-```bash
-# See docs/SMOKE_TEST.md for complete checklist
-
-# Quick test:
-# 1. Create user + business
-# 2. Create lead
-# 3. Assign sequence → status becomes FOLLOWING_UP
-# 4. Trigger worker → message sent
-# 5. Simulate inbound → status becomes REPLIED, automation stops
-```
-
-## 🔗 Full Documentation
-
-- [Setup Guide](./docs/SETUP.md)
-- [Webhook Configuration](./docs/WEBHOOKS.md)
-- [Smoke Test Checklist](./docs/SMOKE_TEST.md)
-
-## 📄 License
+## 📝 License
 
 MIT

@@ -1,147 +1,145 @@
-# FollowUp Pro - Setup Guide
+# Setup Guide - FollowUp Pro v2
 
 ## Prerequisites
 
-- Node.js 18+ 
+- Node.js 18+
 - Python 3.11+
 - PostgreSQL 15+
-- Docker (optional, for PostgreSQL)
-- Expo CLI (`npm install -g expo-cli`)
+- Expo CLI
 
-## Quick Start
+## Backend Setup
 
-### 1. Clone & Install
+### 1. PostgreSQL Database
 
 ```bash
-# Clone repository
-git clone <repo-url>
-cd followup-pro
+# Start PostgreSQL
+sudo service postgresql start
 
-# Install server dependencies
-cd server
-pip install -r requirements.txt
-
-# Install mobile dependencies  
-cd ../mobile
-yarn install
-```
-
-### 2. Database Setup
-
-**Option A: Docker (Recommended)**
-```bash
-# From project root
-docker-compose up -d
-
-# Verify PostgreSQL is running
-docker ps
-```
-
-**Option B: Local PostgreSQL**
-```bash
-# Create database and user
-sudo -u postgres psql
+# Create database and user (if not exists)
+sudo -u postgres psql << EOF
 CREATE USER followup_user WITH PASSWORD 'followup_pass';
 CREATE DATABASE followup_db OWNER followup_user;
 GRANT ALL PRIVILEGES ON DATABASE followup_db TO followup_user;
-\q
+EOF
 ```
 
-### 3. Environment Configuration
+### 2. Environment Variables
 
 ```bash
-# Server
-cd server
+cd /app/backend
 cp .env.example .env
-# Edit .env with your credentials
+# Edit .env with your settings (or use defaults for MOCK_MODE)
+```
 
-# Mobile
-cd ../mobile  
+**Key variables:**
+- `MOCK_MODE=true` - Run without real Twilio/SendGrid/Stripe keys
+- `DATABASE_URL` - PostgreSQL connection string
+- `JWT_SECRET` - Change in production!
+
+### 3. Install Dependencies
+
+```bash
+cd /app/backend
+pip install -r requirements.txt
+```
+
+### 4. Start Backend
+
+```bash
+sudo supervisorctl restart backend
+
+# Check health
+curl http://localhost:8001/api/health
+```
+
+## Frontend Setup
+
+### 1. Environment Variables
+
+```bash
+cd /app/frontend
 cp .env.example .env
-# Edit .env with your backend URL
 ```
 
-### 4. Run the Server
+### 2. Install Dependencies
 
 ```bash
-cd server
-
-# Start the API server (includes scheduler)
-python server.py
-
-# Or with uvicorn for development
-uvicorn server:app --host 0.0.0.0 --port 8001 --reload
+cd /app/frontend
+yarn install
 ```
 
-The server will:
-- Initialize the database tables
-- Seed built-in sequences (Friendly, Professional, Urgent)
-- Start the follow-up scheduler (runs every minute)
-
-### 5. Run the Mobile App
+### 3. Start Expo
 
 ```bash
-cd mobile
+sudo supervisorctl restart expo
 
-# Start Expo development server
+# Or manually:
 yarn start
-
-# Or for specific platforms
-yarn ios     # iOS simulator
-yarn android # Android emulator
-yarn web     # Web browser
 ```
 
-## Migrations & Seeding
+## Creating Demo Account
 
-The server automatically:
-1. Creates all database tables on startup (`init_db()`)
-2. Seeds 3 built-in sequences (`seed_builtin_sequences()`)
-
-To manually reset the database:
 ```bash
-# Drop and recreate database
-sudo -u postgres psql -c "DROP DATABASE followup_db;"
-sudo -u postgres psql -c "CREATE DATABASE followup_db OWNER followup_user;"
-
-# Restart server to recreate tables
-python server.py
+curl -X POST http://localhost:8001/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "demo@followuppro.com",
+    "password": "demo123",
+    "pro_name": "John Smith",
+    "business_name": "Smith Plumbing",
+    "timezone": "America/New_York"
+  }'
 ```
 
-## Testing the Worker
+## Verification
 
-The follow-up scheduler is an **APScheduler interval job** that runs every minute inside the server process.
+1. **Backend Health**: `curl http://localhost:8001/api/health`
+2. **Login**: Use demo credentials on mobile app
+3. **Check Logs**: 
+   - Backend: `tail -f /var/log/supervisor/backend.err.log`
+   - Frontend: `tail -f /var/log/supervisor/expo.out.log`
 
-### How it works:
-1. Finds leads with `status=FOLLOWING_UP` and `next_followup_at <= now`
-2. Sends the message via Twilio/SendGrid (or logs if MOCK_MODE=true)
-3. Advances to next step or marks lead as GHOSTED if complete
-4. Logs everything to `message_logs` table
+## MOCK_MODE Features
 
-### To test locally:
+When `MOCK_MODE=true`:
+
+- **SMS/Email**: Messages logged to `message_logs` table with status `MOCKED`
+- **Push Notifications**: Logged to console, not sent to devices
+- **Stripe**: Payment flows work but no actual charges
+
+### Debug Endpoints
 
 ```bash
-# 1. Create a lead and assign sequence
-curl -X POST http://localhost:8001/api/leads \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"full_name":"Test Lead","phone":"555-123-4567","job_type":"Test Job"}'
+TOKEN="your-jwt-token"
 
-# 2. Assign sequence (this sets next_followup_at to now)
-curl -X POST http://localhost:8001/api/leads/1/assign-sequence \
-  -H "Authorization: Bearer YOUR_TOKEN" \
+# Test push notification
+curl -X POST http://localhost:8001/api/debug/send-push \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"sequence_id":1}'
+  -d '{"title": "Test", "body": "Hello!"}'
 
-# 3. Wait 1 minute or trigger manually
+# Trigger background worker
 curl -X POST http://localhost:8001/api/debug/trigger-worker \
-  -H "Authorization: Bearer YOUR_TOKEN"
+  -H "Authorization: Bearer $TOKEN"
 
-# 4. Check message logs
-curl http://localhost:8001/api/leads/1/messages \
-  -H "Authorization: Bearer YOUR_TOKEN"
+# Simulate incoming message
+curl -X POST http://localhost:8001/api/debug/inbound-message \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"lead_id": "uuid", "channel": "SMS", "body": "Reply from customer"}'
 ```
 
-## Webhook Configuration
+## Production Deployment
 
-See [WEBHOOKS.md](./WEBHOOKS.md) for detailed webhook setup.
+For production, set these environment variables:
+
+```bash
+MOCK_MODE=false
+JWT_SECRET=<strong-random-secret>
+TWILIO_ACCOUNT_SID=<your-sid>
+TWILIO_AUTH_TOKEN=<your-token>
+TWILIO_PHONE_NUMBER=<your-number>
+SENDGRID_API_KEY=<your-key>
+STRIPE_SECRET_KEY=<your-key>
+STRIPE_WEBHOOK_SECRET=<your-secret>
+```
